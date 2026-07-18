@@ -1,0 +1,17 @@
+{
+  "name": "zhiyaunkefu｜智源AI客服工作台",
+  "short_name": "zhiyaunkefu",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f5f7fb",
+  "theme_color": "#6750d8",
+  "description": "智源AI内部客服话术、售后规则、操作教程与退款计算器。",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
