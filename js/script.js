@@ -115,27 +115,7 @@ const KEY = "zy_kb_system_v2",
           `<div class="dashboard"><div class="hero"><h1>zhiyaunkefu 客服知识库</h1><p>统一管理客服话术、产品资料、售后规则和新人培训内容。</p></div><div class="stats"><div class="stat"><b>${groups.length}</b><span>知识分类</span></div><div class="stat"><b>${docs.length}</b><span>话术与文档</span></div><div class="stat"><b>${favs.length}</b><span>收藏内容</span></div><div class="stat"><b>${recent.length}</b><span>最近使用</span></div></div><div class="dashgrid"><div class="panel"><h3>常用入口</h3><div class="quick"><button onclick="jump('售前')">💬 售前话术<br><small>版本、价格、购买说明</small></button><button onclick="jump('售后 · on hold 触发')">⚠️ on hold<br><small>复核、申诉与后续方案</small></button><button onclick="jump('售后 · 处置动作')">💰 售后处置<br><small>退款、补差、升级</small></button><button onclick="jump('新人培训')">🎓 新人培训<br><small>阅读顺序与检查清单</small></button></div></div><div class="panel"><h3>售后退款计算器</h3><div class="calcgrid"><div class="field"><label>计算类型</label><select id="ctype" onchange="calc()"><option value="normal">普通售后：8%＋已用天数</option><option value="onhold">on hold：未使用净额五五分</option><option value="kyc">KYC：销售价减官方成本后按天</option></select></div><div class="field"><label>订单金额（元）</label><input id="price" type="number" value="499" oninput="calc()"></div><div class="field"><label>已使用天数</label><input id="days" type="number" min="0" max="30" value="10" oninput="calc()"></div><div class="field"><label>官方订阅成本（仅 KYC）</label><input id="cost" type="number" value="150" oninput="calc()"></div></div><div class="result">预计退款：<b id="amount">¥0.00</b><div id="formula"></div></div><div class="notice">内部核算工具。对客户仅告知最终金额，不直接展示内部计算公式。</div></div></div></div>`;
         calc();
       }
-      function calc() {
-        let p = +($("#price")?.value || 0),
-          d = Math.max(0, Math.min(30, +($("#days")?.value || 0))),
-          c = +($("#cost")?.value || 0),
-          t = $("#ctype")?.value || "normal",
-          a = 0,
-          f = "";
-        if (t === "normal") {
-          a = p - p * 0.08 - (p / 30) * d;
-          f = "订单价 − 8% 服务费 − 已用天数费用";
-        } else if (t === "onhold") {
-          a = (p * 0.46 * (30 - d)) / 30;
-          f = "销售价 × 0.46 × 未使用天数 ÷ 30";
-        } else {
-          a = Math.max(0, ((p - c) * (30 - d)) / 30);
-          f = "（销售价 − 官方订阅成本）× 未使用天数 ÷ 30";
-        }
-        a = Math.max(0, a);
-        if ($("#amount")) $("#amount").textContent = "¥" + a.toFixed(2);
-        if ($("#formula")) $("#formula").textContent = f;
-      }
+      
       function openGroup(gi) {
         activeG = gi;
         activeI = 0;
