@@ -1,4 +1,5 @@
 window.KB_TUTORIALS = {
+  "category_id": "tutorials",
   "title": "操作教程",
   "items": [
     {

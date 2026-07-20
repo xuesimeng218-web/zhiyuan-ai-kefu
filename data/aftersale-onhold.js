@@ -1,4 +1,5 @@
 window.KB_AFTERSALE_ONHOLD = {
+  "category_id": "aftersale-onhold",
   "title": "售后 · on hold 触发",
   "items": [
     {

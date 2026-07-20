@@ -1,4 +1,5 @@
 window.KB_AFTERSALE_ACTIONS = {
+  "category_id": "aftersale-actions",
   "title": "售后 · 处置动作",
   "items": [
     {

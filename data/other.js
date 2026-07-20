@@ -1,4 +1,5 @@
 window.KB_OTHER = {
+  "category_id": "other",
   "title": "其他",
   "items": [
     {

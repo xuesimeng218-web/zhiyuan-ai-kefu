@@ -1,4 +1,5 @@
 window.KB_TRAINING = {
+  "category_id": "training",
   "title": "新人培训",
   "items": [
     {

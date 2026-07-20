@@ -1,4 +1,5 @@
 window.KB_PRODUCTS = {
+  "category_id": "products",
   "title": "产品中心",
   "items": [
     {

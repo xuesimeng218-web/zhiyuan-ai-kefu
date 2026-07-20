@@ -1,4 +1,5 @@
 window.KB_PRESALE = {
+  "category_id": "presale",
   "title": "售前",
   "items": [
     {
