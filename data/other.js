@@ -1,8 +1,10 @@
 window.KB_OTHER = {
+  "category_id": "other",
   "title": "其他",
   "items": [
     {
       "title": "老客户质问旧承诺（“你之前说全程质保 / 永久”）",
+      "content_id": "content_cat_other_001",
       "paragraphs": [
         "亲，您说的这个情况我了解，之前确实是这么跟您说的，这点我认。您先别急，该给您的保障一样不少~",
         "先跟您说明确：您现在这单还在质保期内，就按您当初购买时约定的来处理，该保的保、该处理的处理，这是您已经买了的权益，不受政策调整影响。",
@@ -12,6 +14,7 @@ window.KB_OTHER = {
     },
     {
       "title": "GPT 价格调整说明",
+      "content_id": "content_cat_other_002",
       "paragraphs": []
     }
   ]

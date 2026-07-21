@@ -1,8 +1,10 @@
 window.KB_TRAINING = {
+  "category_id": "training",
   "title": "新人培训",
   "items": [
     {
       "title": "新人上岗阅读顺序",
+      "content_id": "content_cat_training_001",
       "paragraphs": [
         "先读：客户认知引导框架、产品服务知识库、客服服务标准 SOP、合规表述词表、服务条款说明。",
         "再学：Claude、ChatGPT 的具体充值教程。",
@@ -11,6 +13,7 @@ window.KB_TRAINING = {
     },
     {
       "title": "每单交付检查清单",
+      "content_id": "content_cat_training_002",
       "paragraphs": [
         "□ 核对客户编号与订单 SKU",
         "□ 核对账号、版本和套餐期限",

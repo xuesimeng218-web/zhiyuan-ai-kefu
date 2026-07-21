@@ -1,8 +1,10 @@
 window.KB_AFTERSALE_ONHOLD = {
+  "category_id": "aftersale-onhold",
   "title": "售后 · on hold 触发",
   "items": [
     {
       "title": "客户触发 on hold（第一时间 · 复核申诉指引）",
+      "content_id": "content_cat_aftersale_onhold_001",
       "paragraphs": [
         "亲，您这个情况是 Claude 官方检测到账户存在异常活动后，临时把账号进入审核状态了。",
         "目前账号里的聊天和数据，页面提示是安全的。您需要点击 Request a review 提交复核，官方会通过邮箱反馈审核结果，页面显示审核大概需要 10 天左右。",
@@ -15,6 +17,7 @@ window.KB_AFTERSALE_ONHOLD = {
     },
     {
       "title": "Max 定制 （退款 + 三方案）",
+      "content_id": "content_cat_aftersale_onhold_002",
       "paragraphs": [
         "亲，先跟您把情况如实说清楚~",
         "您这个账号触发的是官方（Anthropic）的 on hold 审核机制，被临时暂停复核了。这是官方平台层面的机制，最近对大陆这边整体收紧，谁都没法完全避开。而且有个关键点先跟您讲明白：这次触发之后，您这台设备的当前使用环境已经被平台记录了，就算再换一个新的 Claude 账号，大概率还是会很快再次触发。",
@@ -29,6 +32,7 @@ window.KB_AFTERSALE_ONHOLD = {
     },
     {
       "title": "Pro · on hold 触发（退款与后续方案）",
+      "content_id": "content_cat_aftersale_onhold_003",
       "paragraphs": [
         "亲，先跟您把情况如实说清楚~",
         "您这个账号触发的是官方的 on hold 平台审核层面的机制，最近对大陆这边整体收紧，谁都没法完全避开。这次触发之后，您这台设备的当前使用环境已经被平台记录了，就算再换一个新的 Claude 账号，大概率还是会很快再次触发。",
@@ -43,6 +47,7 @@ window.KB_AFTERSALE_ONHOLD = {
     },
     {
       "title": "Max / Pro 护航版 · on hold 触发（五五分 + 两方向）",
+      "content_id": "content_cat_aftersale_onhold_004",
       "paragraphs": [
         "亲，先跟您把情况如实说清楚~",
         "您这个账号触发的是官方（Anthropic）的 on hold 审核机制，被临时暂停复核了。这是官方平台层面的机制，最近对大陆这边整体收紧，谁都没法完全避开。而且有个关键点先跟您讲明白：这次触发之后，您这台设备的当前使用环境已经被平台记录了，就算再换一个新的 Claude 账号，大概率还是会很快再次触发。",

@@ -4,13 +4,15 @@ const KEY = "zy_kb_system_v2",
       let groups =
         JSON.parse(localStorage.getItem(KEY) || "null") ||
         structuredClone(ORIGINAL_DATA);
-      let favs = JSON.parse(localStorage.getItem(FKEY) || "[]");
-      let recent = JSON.parse(localStorage.getItem(RKEY) || "[]");
+      hydrateGroups();
+      let favs = normalizeStoredIds(JSON.parse(localStorage.getItem(FKEY) || "[]"));
+      let recent = normalizeStoredIds(JSON.parse(localStorage.getItem(RKEY) || "[]"));
       let mode = "home",
         activeG = 0,
         activeI = 0,
         editing = false;
       const $ = (s) => document.querySelector(s);
+      save();
       function esc(s) {
         return String(s ?? "").replace(
           /[&<>"']/g,
@@ -27,6 +29,75 @@ const KEY = "zy_kb_system_v2",
       function id(g, i) {
         return g + "-" + i;
       }
+      function hydrateGroups() {
+        groups = groups.map((g, gi) => {
+          const baseGroup = ORIGINAL_DATA[gi] || {};
+          const baseItems = baseGroup.items || [];
+          return {
+            ...baseGroup,
+            ...g,
+            category_id:
+              g.category_id || baseGroup.category_id || `group_${gi}`,
+            items: (g.items || []).map((x, ii) => {
+              const baseItem = baseItems[ii] || {};
+              return {
+                ...baseItem,
+                ...x,
+                content_id: x.content_id || baseItem.content_id || id(gi, ii),
+              };
+            }),
+          };
+        });
+      }
+      function getContentId(g, i) {
+        let x = groups[g]?.items?.[i];
+        return x?.content_id || id(g, i);
+      }
+      function normalizeStoredId(raw) {
+        if (typeof raw !== "string") return null;
+        const value = raw.trim();
+        if (!value) return null;
+        if (value.startsWith("content_cat_")) return value;
+        if (/^\d+-\d+$/.test(value)) {
+          let [g, i] = value.split("-").map(Number);
+          let x = groups[g]?.items?.[i];
+          return x?.content_id || value;
+        }
+        return null;
+      }
+      function normalizeStoredIds(arr) {
+        if (!Array.isArray(arr)) return [];
+        let out = [];
+        let seen = new Set();
+        arr.forEach((raw) => {
+          let next = normalizeStoredId(raw);
+          if (!next || seen.has(next)) return;
+          seen.add(next);
+          out.push(next);
+        });
+        return out;
+      }
+      function resolveStoredIdRecord(k) {
+        let normalized = normalizeStoredId(k);
+        if (!normalized) return null;
+        if (normalized.startsWith("content_cat_")) {
+          for (let g = 0; g < groups.length; g++) {
+            for (let i = 0; i < groups[g].items.length; i++) {
+              let x = groups[g].items[i];
+              if (x?.content_id === normalized) {
+                return { g: groups[g], gi: g, x, ii: i };
+              }
+            }
+          }
+          return null;
+        }
+        if (/^\d+-\d+$/.test(normalized)) {
+          let [g, i] = normalized.split("-").map(Number);
+          let x = groups[g]?.items?.[i];
+          return x ? { g: groups[g], gi: g, x, ii: i } : null;
+        }
+        return null;
+      }
       function toast(s) {
         let t = $("#toast");
         t.textContent = s;
@@ -35,6 +106,9 @@ const KEY = "zy_kb_system_v2",
         window.tt = setTimeout(() => t.classList.remove("show"), 1200);
       }
       function save() {
+        hydrateGroups();
+        favs = normalizeStoredIds(favs);
+        recent = normalizeStoredIds(recent);
         localStorage.setItem(KEY, JSON.stringify(groups));
         localStorage.setItem(FKEY, JSON.stringify(favs));
         localStorage.setItem(RKEY, JSON.stringify(recent));
@@ -79,12 +153,7 @@ const KEY = "zy_kb_system_v2",
         renderList(
           recent
             .slice(0, 6)
-            .map((k) => {
-              let [g, i] = k.split("-").map(Number);
-              return groups[g]?.items[i]
-                ? { g: groups[g], gi: g, x: groups[g].items[i], ii: i }
-                : null;
-            })
+            .map((k) => resolveStoredIdRecord(k))
             .filter(Boolean),
           "最近使用",
         );
@@ -111,7 +180,7 @@ const KEY = "zy_kb_system_v2",
         activeG = gi;
         activeI = ii;
         setMode("group");
-        let k = id(gi, ii);
+        let k = getContentId(gi, ii);
         recent = [k, ...recent.filter((x) => x !== k)].slice(0, 20);
         save();
         renderList(
@@ -128,7 +197,7 @@ const KEY = "zy_kb_system_v2",
         }
         let text = x.paragraphs.join("\n\n");
         $("#main").innerHTML =
-          `<div class="topbar"><div class="crumb">${esc(groups[activeG].title)} / ${editing ? "编辑内容" : "查看内容"}</div><div class="tools"><button class="btn" onclick="toggleFav(${activeG},${activeI})">${favs.includes(id(activeG, activeI)) ? "★ 已收藏" : "☆ 收藏"}</button><button class="btn" onclick="copyCurrent()">复制</button><button class="btn primary" onclick="toggleEdit()">${editing ? "完成编辑" : "编辑"}</button><button class="btn danger" onclick="deleteCurrent()">删除</button></div></div><div class="paper">${editing ? `<input class="titleinput" id="titleEdit" value="${esc(x.title)}"><textarea class="contentarea" id="bodyEdit">${esc(text)}</textarea>` : `<h1 style="margin:0;border-bottom:1px solid var(--line);padding-bottom:12px">${esc(x.title)}</h1><div class="readview">${esc(text)}</div>`}</div>`;
+          `<div class="topbar"><div class="crumb">${esc(groups[activeG].title)} / ${editing ? "编辑内容" : "查看内容"}</div><div class="tools"><button class="btn" onclick="toggleFav(${activeG},${activeI})">${favs.includes(getContentId(activeG, activeI)) ? "★ 已收藏" : "☆ 收藏"}</button><button class="btn" onclick="copyCurrent()">复制</button><button class="btn primary" onclick="toggleEdit()">${editing ? "完成编辑" : "编辑"}</button><button class="btn danger" onclick="deleteCurrent()">删除</button></div></div><div class="paper">${editing ? `<input class="titleinput" id="titleEdit" value="${esc(x.title)}"><textarea class="contentarea" id="bodyEdit">${esc(text)}</textarea>` : `<h1 style="margin:0;border-bottom:1px solid var(--line);padding-bottom:12px">${esc(x.title)}</h1><div class="readview">${esc(text)}</div>`}</div>`;
       }
       function toggleEdit() {
         if (editing) {
@@ -158,7 +227,7 @@ const KEY = "zy_kb_system_v2",
         if (x) copyText(x.paragraphs.join("\n\n"));
       }
       function toggleFav(g, i) {
-        let k = id(g, i);
+        let k = getContentId(g, i);
         favs = favs.includes(k) ? favs.filter((x) => x !== k) : [...favs, k];
         save();
         if (mode === "fav") showFavs();
@@ -168,14 +237,7 @@ const KEY = "zy_kb_system_v2",
       function showFavs() {
         setMode("fav");
         renderNav();
-        let arr = favs
-          .map((k) => {
-            let [g, i] = k.split("-").map(Number);
-            return groups[g]?.items[i]
-              ? { g: groups[g], gi: g, x: groups[g].items[i], ii: i }
-              : null;
-          })
-          .filter(Boolean);
+        let arr = favs.map((k) => resolveStoredIdRecord(k)).filter(Boolean);
         renderList(arr, "我的收藏");
         $("#main").innerHTML =
           '<div class="empty">从左侧选择收藏内容查看。</div>';
@@ -183,14 +245,7 @@ const KEY = "zy_kb_system_v2",
       function showRecent() {
         setMode("recent");
         renderNav();
-        let arr = recent
-          .map((k) => {
-            let [g, i] = k.split("-").map(Number);
-            return groups[g]?.items[i]
-              ? { g: groups[g], gi: g, x: groups[g].items[i], ii: i }
-              : null;
-          })
-          .filter(Boolean);
+        let arr = recent.map((k) => resolveStoredIdRecord(k)).filter(Boolean);
         renderList(arr, "最近使用");
         $("#main").innerHTML =
           '<div class="empty">从左侧选择最近使用内容查看。</div>';
