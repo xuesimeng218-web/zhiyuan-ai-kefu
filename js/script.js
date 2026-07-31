@@ -1,12 +1,31 @@
 const KEY = "zy_kb_system_v2",
         FKEY = "zy_kb_favs_v2",
-        RKEY = "zy_kb_recent_v2";
-      let groups =
-        JSON.parse(localStorage.getItem(KEY) || "null") ||
-        structuredClone(ORIGINAL_DATA);
+        RKEY = "zy_kb_recent_v2",
+        IKEY = "zy_kb_article_images_v2",
+        DATA_VERSION_KEY = "zy_kb_default_data_version_v2",
+        DATA_BACKUP_KEY = "zy_kb_system_v2_pre_document_pack_backup",
+        DATA_VERSION = "document-pack-2026-07-22";
+      const storedGroupsRaw = localStorage.getItem(KEY);
+      const storedGroups = JSON.parse(storedGroupsRaw || "null");
+      let needsDataVersionWrite =
+        localStorage.getItem(DATA_VERSION_KEY) !== DATA_VERSION;
+      let groups = storedGroups || structuredClone(ORIGINAL_DATA);
+      if (storedGroups && needsDataVersionWrite) {
+        if (!localStorage.getItem(DATA_BACKUP_KEY)) {
+          localStorage.setItem(DATA_BACKUP_KEY, storedGroupsRaw);
+        }
+        groups = mergeOriginalData(storedGroups);
+      }
       hydrateGroups();
       let favs = normalizeStoredIds(JSON.parse(localStorage.getItem(FKEY) || "[]"));
       let recent = normalizeStoredIds(JSON.parse(localStorage.getItem(RKEY) || "[]"));
+      const storedArticleImages = JSON.parse(localStorage.getItem(IKEY) || "{}");
+      let articleImageState =
+        storedArticleImages &&
+        typeof storedArticleImages === "object" &&
+        !Array.isArray(storedArticleImages)
+          ? storedArticleImages
+          : {};
       let mode = "home",
         activeG = 0,
         activeI = 0,
@@ -24,14 +43,738 @@ const KEY = "zy_kb_system_v2",
               '"': "&quot;",
               "'": "&#39;",
             })[c],
+          );
+      }
+      function renderMarkdownInline(raw) {
+        return esc(raw)
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+          .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+          .replace(/~~([^~]+)~~/g, "<del>$1</del>");
+      }
+      function splitTableRow(line) {
+        return line
+          .trim()
+          .replace(/^\|/, "")
+          .replace(/\|$/, "")
+          .split("|")
+          .map((cell) => cell.trim());
+      }
+      function isTableDivider(line) {
+        const cells = splitTableRow(line);
+        return (
+          cells.length > 0 &&
+          cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")))
         );
+      }
+      function renderMarkdownTable(lines, start) {
+        const headers = splitTableRow(lines[start]);
+        const rows = [];
+        let index = start + 2;
+        while (index < lines.length && /^\s*\|/.test(lines[index])) {
+          rows.push(splitTableRow(lines[index]));
+          index += 1;
+        }
+        const width = Math.max(
+          headers.length,
+          ...rows.map((row) => row.length),
+        );
+        const normalizeRow = (row) =>
+          Array.from({ length: width }, (_, i) => row[i] || "");
+        return {
+          html: `<div class="md-table-wrap"><table><thead><tr>${normalizeRow(
+            headers,
+          )
+            .map((cell) => `<th>${renderMarkdownInline(cell)}</th>`)
+            .join("")}</tr></thead><tbody>${rows
+            .map(
+              (row) =>
+                `<tr>${normalizeRow(row)
+                  .map((cell) => `<td>${renderMarkdownInline(cell)}</td>`)
+                  .join("")}</tr>`,
+            )
+            .join("")}</tbody></table></div>`,
+          next: index,
+        };
+      }
+      function isFlowDiagram(text) {
+        return (
+          /[┌┐└┘├┤┬┴┼│─▼▶]/.test(text) ||
+          /^\s*[↓▼]\s*$/m.test(text)
+        );
+      }
+      function splitFlowLine(line) {
+        const cleaned = line
+          .replace(/[┌┐└┘├┤┬┴┼─═]+/g, "  ")
+          .replace(/[│]+/g, "  ")
+          .replace(/[▼▶]+/g, "  ")
+          .replace(/^\s*↓\s*$/, "")
+          .replace(/\s+↓\s*/g, "  ")
+          .trim();
+        if (!/[\u3400-\u9fffA-Za-z0-9￥¥$%]/.test(cleaned)) return [];
+        return cleaned
+          .split(/\s{2,}/)
+          .map((part) => part.trim())
+          .filter(
+            (part) =>
+              part && /[\u3400-\u9fffA-Za-z0-9￥¥$%]/.test(part),
+          );
+      }
+      function renderFlowDiagram(text) {
+        const rows = text
+          .split("\n")
+          .map(splitFlowLine)
+          .filter((parts) => parts.length);
+        return `<div class="md-flow" aria-label="流程说明">${rows
+          .map(
+            (parts) =>
+              `<div class="md-flow-row">${parts
+                .map(
+                  (part) =>
+                    `<div class="md-flow-step">${renderMarkdownInline(part)}</div>`,
+                )
+                .join("")}</div>`,
+          )
+          .join("")}</div>`;
+      }
+      function renderMarkdownCodeBlock(text) {
+        if (isFlowDiagram(text)) return renderFlowDiagram(text);
+        return `<div class="md-code-block">${text
+          .split("\n")
+          .map((line) => {
+            const list = line.match(/^\s*[-*+]\s+(.+)$/);
+            if (list) {
+              return `<div class="md-code-list-item">${renderMarkdownInline(list[1])}</div>`;
+            }
+            return line.trim()
+              ? `<div>${renderMarkdownInline(line)}</div>`
+              : '<div class="md-code-spacer"></div>';
+          })
+          .join("")}</div>`;
+      }
+      function markdownListMatch(line) {
+        const match = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
+        if (!match) return null;
+        return {
+          depth: Math.min(3, Math.floor(match[1].replace(/\t/g, "  ").length / 2)),
+          ordered: /^\d/.test(match[2]),
+          text: match[3],
+        };
+      }
+      function renderMarkdown(text, articleTitle = "") {
+        const lines = String(text ?? "").replace(/\r\n/g, "\n").split("\n");
+        const out = [];
+        let index = 0;
+        let skippedTitle = false;
+        while (index < lines.length) {
+          const line = lines[index];
+          if (!line.trim()) {
+            index += 1;
+            continue;
+          }
+          if (/^\s*```/.test(line)) {
+            const code = [];
+            index += 1;
+            while (index < lines.length && !/^\s*```/.test(lines[index])) {
+              code.push(lines[index]);
+              index += 1;
+            }
+            if (index < lines.length) index += 1;
+            out.push(renderMarkdownCodeBlock(code.join("\n").trim()));
+            continue;
+          }
+          const heading = line.match(/^\s*(#{1,6})\s+(.+)$/);
+          if (heading) {
+            const headingText = heading[2].trim();
+            if (
+              !skippedTitle &&
+              heading[1].length === 1 &&
+              headingText === articleTitle
+            ) {
+              skippedTitle = true;
+              index += 1;
+              continue;
+            }
+            const level = Math.min(6, heading[1].length + 1);
+            out.push(
+              `<h${level}>${renderMarkdownInline(headingText)}</h${level}>`,
+            );
+            index += 1;
+            continue;
+          }
+          if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+            out.push("<hr>");
+            index += 1;
+            continue;
+          }
+          if (
+            /^\s*\|/.test(line) &&
+            index + 1 < lines.length &&
+            isTableDivider(lines[index + 1])
+          ) {
+            const table = renderMarkdownTable(lines, index);
+            out.push(table.html);
+            index = table.next;
+            continue;
+          }
+          if (/^\s*>/.test(line)) {
+            const quote = [];
+            while (index < lines.length && /^\s*>/.test(lines[index])) {
+              quote.push(lines[index].replace(/^\s*>\s?/, ""));
+              index += 1;
+            }
+            out.push(`<blockquote>${renderMarkdown(quote.join("\n"))}</blockquote>`);
+            continue;
+          }
+          const firstListItem = markdownListMatch(line);
+          if (firstListItem) {
+            const tag = firstListItem.ordered ? "ol" : "ul";
+            const items = [];
+            while (index < lines.length) {
+              const item = markdownListMatch(lines[index]);
+              if (!item || item.ordered !== firstListItem.ordered) break;
+              items.push(
+                `<li class="md-list-depth-${item.depth}">${renderMarkdownInline(item.text)}</li>`,
+              );
+              index += 1;
+            }
+            out.push(`<${tag}>${items.join("")}</${tag}>`);
+            continue;
+          }
+          const paragraph = [line.trim()];
+          index += 1;
+          while (
+            index < lines.length &&
+            lines[index].trim() &&
+            !/^\s*```/.test(lines[index]) &&
+            !/^\s*(#{1,6})\s+/.test(lines[index]) &&
+            !/^\s*>/.test(lines[index]) &&
+            !markdownListMatch(lines[index]) &&
+            !/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(lines[index]) &&
+            !(/^\s*\|/.test(lines[index]) &&
+              index + 1 < lines.length &&
+              isTableDivider(lines[index + 1]))
+          ) {
+            paragraph.push(lines[index].trim());
+            index += 1;
+          }
+          out.push(`<p>${paragraph.map(renderMarkdownInline).join("<br>")}</p>`);
+        }
+        return out.join("");
+      }
+      function safeImageSrc(raw) {
+        const src = String(raw ?? "").trim();
+        if (!src || src.includes("\0") || src.startsWith("//")) return "";
+        if (/^data:/i.test(src)) {
+          return /^data:image\/(png|jpe?g|gif|webp);base64,/i.test(src)
+            ? src
+            : "";
+        }
+        if (/^[a-z][a-z\d+.-]*:/i.test(src) && !/^https:/i.test(src)) {
+          return "";
+        }
+        return src;
+      }
+      function normalizeImages(raw, fallbackAlt = "文章图片") {
+        const images = Array.isArray(raw) ? raw : raw ? [raw] : [];
+        return images
+          .map((image, index) => {
+            const record = typeof image === "string" ? { src: image } : image;
+            if (!record || typeof record !== "object") return null;
+            const src = safeImageSrc(record.src);
+            if (!src) return null;
+            return {
+              image_id: String(record.image_id || record.id || ""),
+              content_id: String(record.content_id || ""),
+              source: String(record.source || ""),
+              src,
+              alt: String(record.alt || fallbackAlt),
+              caption: String(record.caption || ""),
+              file_name: String(record.file_name || `图片 ${index + 1}`),
+            };
+          })
+          .filter(Boolean);
+      }
+      function ensureArticleImageState(contentId) {
+        const current = articleImageState[contentId];
+        if (!current || typeof current !== "object" || Array.isArray(current)) {
+          articleImageState[contentId] = {};
+        }
+        const state = articleImageState[contentId];
+        if (!Array.isArray(state.uploads)) state.uploads = [];
+        if (!Array.isArray(state.order)) state.order = [];
+        if (!Array.isArray(state.hidden)) state.hidden = [];
+        if (!state.captions || typeof state.captions !== "object") {
+          state.captions = {};
+        }
+        return state;
+      }
+      function updateArticleImageState(contentId, updater) {
+        const existed = Object.prototype.hasOwnProperty.call(
+          articleImageState,
+          contentId,
+        );
+        const previous = existed
+          ? structuredClone(articleImageState[contentId])
+          : null;
+        const state = ensureArticleImageState(contentId);
+        updater(state);
+        try {
+          localStorage.setItem(IKEY, JSON.stringify(articleImageState));
+          return true;
+        } catch (error) {
+          if (existed) articleImageState[contentId] = previous;
+          else delete articleImageState[contentId];
+          alert("图片保存失败，可能是浏览器本地存储空间不足。请减少图片数量或尺寸后重试。");
+          return false;
+        }
+      }
+      function getArticleImages(article, g, i) {
+        if (!article) return [];
+        const contentId = article.content_id || id(g, i);
+        const official = normalizeImages(article.images, article.title).map(
+          (image, index) => ({
+            ...image,
+            image_id:
+              image.image_id || `${contentId}_official_${index + 1}`,
+            content_id: contentId,
+            source: "official",
+          }),
+        );
+        const rawState = articleImageState[contentId];
+        if (!rawState || typeof rawState !== "object") return official;
+        const uploads = normalizeImages(rawState.uploads, article.title)
+          .filter(
+            (image) => !image.content_id || image.content_id === contentId,
+          )
+          .map((image, index) => ({
+            ...image,
+            image_id:
+              image.image_id || `${contentId}_upload_legacy_${index + 1}`,
+            content_id: contentId,
+            source: "upload",
+          }));
+        const hidden = new Set(Array.isArray(rawState.hidden) ? rawState.hidden : []);
+        const captions =
+          rawState.captions && typeof rawState.captions === "object"
+            ? rawState.captions
+            : {};
+        const unique = new Map();
+        [...official, ...uploads].forEach((image) => {
+          if (hidden.has(image.image_id) || unique.has(image.image_id)) return;
+          unique.set(image.image_id, {
+            ...image,
+            caption: Object.prototype.hasOwnProperty.call(
+              captions,
+              image.image_id,
+            )
+              ? String(captions[image.image_id])
+              : image.caption,
+          });
+        });
+        const order = Array.isArray(rawState.order) ? rawState.order : [];
+        const positions = new Map(order.map((imageId, index) => [imageId, index]));
+        return [...unique.values()].sort((a, b) => {
+          const aPosition = positions.has(a.image_id)
+            ? positions.get(a.image_id)
+            : Number.MAX_SAFE_INTEGER;
+          const bPosition = positions.has(b.image_id)
+            ? positions.get(b.image_id)
+            : Number.MAX_SAFE_INTEGER;
+          return aPosition - bPosition;
+        });
+      }
+      function renderArticleImages(raw, title) {
+        const images = normalizeImages(raw, title);
+        if (!images.length) return "";
+        return `<div class="article-images" aria-label="文章图片">${images
+          .map(
+            (image, index) =>
+              `<figure class="article-image"><button type="button" class="article-image-button" onclick="openImage(${activeG},${activeI},${index})" aria-label="查看大图：${esc(image.alt)}"><img src="${esc(image.src)}" alt="${esc(image.alt)}" loading="lazy" onerror="this.closest('.article-image').remove()"></button>${image.caption ? `<figcaption>${esc(image.caption)}</figcaption>` : ""}</figure>`,
+          )
+          .join("")}</div>`;
+      }
+      function openImage(g, i, imageIndex) {
+        const article = groups[g]?.items?.[i];
+        const image = getArticleImages(article, g, i)[imageIndex];
+        if (!image) return;
+        closeImageViewer();
+        const viewer = document.createElement("div");
+        viewer.className = "image-viewer";
+        viewer.setAttribute("role", "dialog");
+        viewer.setAttribute("aria-modal", "true");
+        viewer.setAttribute("aria-label", image.alt);
+        viewer.innerHTML = `<button type="button" class="image-viewer-close" onclick="closeImageViewer()" aria-label="关闭图片">×</button><div class="image-viewer-content"><img src="${esc(image.src)}" alt="${esc(image.alt)}">${image.caption ? `<div>${esc(image.caption)}</div>` : ""}</div>`;
+        viewer.addEventListener("click", (event) => {
+          if (event.target === viewer) closeImageViewer();
+        });
+        document.body.appendChild(viewer);
+        document.body.classList.add("viewing-image");
+        viewer.querySelector(".image-viewer-close")?.focus();
+      }
+      function renderImageManager(g, i) {
+        const article = groups[g]?.items?.[i];
+        if (!article) return "";
+        const contentId = getContentId(g, i);
+        const images = getArticleImages(article, g, i);
+        return `<section class="image-manager" data-content-id="${esc(contentId)}" tabindex="0" onpaste="pasteArticleImages(event)" aria-label="文章图片管理区，可粘贴图片"><div class="image-manager-head"><div><h2>文章图片</h2><p>图片独立保存，并与当前文章 ID <code>${esc(contentId)}</code> 关联。</p><p class="image-paste-hint">点击此区域后按 Command+V / Ctrl+V，可直接粘贴从微信复制的图片。</p></div><label class="btn image-upload-button">选择图片<input class="image-upload-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple onchange="addArticleImages(event)"></label></div>${images.length ? `<div class="image-manager-grid">${images
+          .map(
+            (image, index) =>
+              `<article class="image-manager-card"><button type="button" class="image-manager-preview" onclick="openImage(${g},${i},${index})" aria-label="放大图片：${esc(image.alt)}"><img src="${esc(image.src)}" alt="${esc(image.alt)}" loading="lazy"></button><div class="image-manager-meta"><span>${image.source === "official" ? "正式资料图片" : "浏览器上传"}</span><small>${index + 1} / ${images.length}</small></div><label>图片说明<input type="text" value="${esc(image.caption)}" placeholder="可填写图片说明" oninput="scheduleImageCaption(${g},${i},${index},this.value)" onblur="flushImageCaption(${g},${i},${index},this.value)"></label><div class="image-manager-actions"><button type="button" class="btn" onclick="moveArticleImage(${g},${i},${index},-1)" ${index === 0 ? "disabled" : ""}>上移</button><button type="button" class="btn" onclick="moveArticleImage(${g},${i},${index},1)" ${index === images.length - 1 ? "disabled" : ""}>下移</button><button type="button" class="btn danger" onclick="deleteArticleImage(${g},${i},${index})">删除</button></div></article>`,
+          )
+          .join("")}</div>` : '<div class="image-manager-empty">暂无图片。可选择图片，或点击此区域后直接粘贴图片。</div>'}</section>`;
+      }
+      function refreshImageManager(contentId, focusManager = false) {
+        const record = resolveStoredIdRecord(contentId);
+        const manager = document.querySelector(
+          `.image-manager[data-content-id="${CSS.escape(contentId)}"]`,
+        );
+        if (!record || !manager) return;
+        manager.outerHTML = renderImageManager(record.gi, record.ii);
+        if (focusManager) {
+          document
+            .querySelector(
+              `.image-manager[data-content-id="${CSS.escape(contentId)}"]`,
+            )
+            ?.focus();
+        }
+      }
+      function createImageId(contentId) {
+        const random =
+          globalThis.crypto?.randomUUID?.().replace(/-/g, "") ||
+          Math.random().toString(36).slice(2) + Date.now().toString(36);
+        return `${contentId}_image_${random}`;
+      }
+      function readFileAsDataUrl(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("read failed"));
+          reader.readAsDataURL(file);
+        });
+      }
+      function optimizeImageDataUrl(dataUrl, file) {
+        if (file.type === "image/gif") return Promise.resolve(dataUrl);
+        return new Promise((resolve) => {
+          const image = new Image();
+          image.onload = () => {
+            const maxSide = 1600;
+            const initialScale = Math.min(
+              1,
+              maxSide / Math.max(image.naturalWidth, image.naturalHeight),
+            );
+            const canvas = document.createElement("canvas");
+            const context = canvas.getContext("2d");
+            if (!context) {
+              resolve(dataUrl);
+              return;
+            }
+            const targetLength = 650 * 1024;
+            const qualities = [0.84, 0.72, 0.6];
+            let best = dataUrl;
+            for (let attempt = 0; attempt < 12; attempt += 1) {
+              const shrink = Math.pow(0.82, Math.floor(attempt / 3));
+              const scale = initialScale * shrink;
+              canvas.width = Math.max(
+                1,
+                Math.round(image.naturalWidth * scale),
+              );
+              canvas.height = Math.max(
+                1,
+                Math.round(image.naturalHeight * scale),
+              );
+              context.clearRect(0, 0, canvas.width, canvas.height);
+              context.drawImage(image, 0, 0, canvas.width, canvas.height);
+              const candidate = canvas.toDataURL(
+                "image/webp",
+                qualities[attempt % qualities.length],
+              );
+              if (candidate.length < best.length) best = candidate;
+              if (candidate.length <= targetLength) {
+                resolve(candidate.length < dataUrl.length ? candidate : dataUrl);
+                return;
+              }
+            }
+            resolve(best);
+          };
+          image.onerror = () => resolve(dataUrl);
+          image.src = dataUrl;
+        });
+      }
+      async function processArticleImageFiles(rawFiles, contentId) {
+        const files = [...rawFiles];
+        if (!files.length) return;
+        if (!isStableContentId(contentId)) return;
+        const record = resolveStoredIdRecord(contentId);
+        const article = record?.x;
+        if (!article || article.content_id !== contentId) {
+          alert("当前文章已发生变化，请重新打开文章后再添加图片。");
+          return;
+        }
+        const allowed = /^(image\/(png|jpeg|gif|webp))$/i;
+        if (files.some((file) => !allowed.test(file.type))) {
+          alert("仅支持 PNG、JPG、GIF 和 WebP 图片。");
+          return;
+        }
+        if (files.some((file) => file.size > 12 * 1024 * 1024)) {
+          alert("单张原图不能超过 12MB，请压缩后重试。");
+          return;
+        }
+        try {
+          const uploads = [];
+          for (const file of files) {
+            const raw = await readFileAsDataUrl(file);
+            const src = await optimizeImageDataUrl(raw, file);
+            if (!safeImageSrc(src) || src.length > 900 * 1024) {
+              throw new Error("image too large");
+            }
+            uploads.push({
+              image_id: createImageId(contentId),
+              content_id: contentId,
+              source: "upload",
+              src,
+              alt: file.name || article.title,
+              caption: "",
+              file_name: file.name || "剪贴板图片",
+            });
+          }
+          const latestRecord = resolveStoredIdRecord(contentId);
+          if (!latestRecord || latestRecord.x.content_id !== contentId) {
+            throw new Error("article changed");
+          }
+          const currentOrder = getArticleImages(
+            latestRecord.x,
+            latestRecord.gi,
+            latestRecord.ii,
+          ).map((image) => image.image_id);
+          const saved = updateArticleImageState(contentId, (state) => {
+            state.uploads.push(...uploads);
+            state.order = [
+              ...currentOrder,
+              ...uploads.map((image) => image.image_id),
+            ];
+          });
+          if (!saved) return;
+          refreshImageManager(contentId, true);
+          toast(`已添加并压缩 ${uploads.length} 张图片`);
+        } catch (error) {
+          alert("图片处理失败或压缩后仍过大，请换用尺寸更小的图片。");
+        }
+      }
+      async function addArticleImages(event) {
+        const input = event.currentTarget;
+        const files = [...(input.files || [])];
+        const contentId = input.closest(".image-manager")?.dataset.contentId;
+        input.value = "";
+        await processArticleImageFiles(files, contentId);
+      }
+      async function pasteArticleImages(event) {
+        const contentId = event.currentTarget.dataset.contentId;
+        const files = [...(event.clipboardData?.items || [])]
+          .filter(
+            (item) =>
+              item.kind === "file" && /^image\//i.test(item.type || ""),
+          )
+          .map((item) => item.getAsFile())
+          .filter(Boolean);
+        if (!files.length) return;
+        event.preventDefault();
+        await processArticleImageFiles(files, contentId);
+      }
+      const imageCaptionTimers = new Map();
+      function persistImageCaption(image, caption) {
+        if (!image) return;
+        updateArticleImageState(image.content_id, (state) => {
+          state.captions[image.image_id] = String(caption || "");
+        });
+      }
+      function scheduleImageCaption(g, i, imageIndex, caption) {
+        const article = groups[g]?.items?.[i];
+        const image = getArticleImages(article, g, i)[imageIndex];
+        if (!image) return;
+        clearTimeout(imageCaptionTimers.get(image.image_id));
+        imageCaptionTimers.set(
+          image.image_id,
+          setTimeout(() => {
+            imageCaptionTimers.delete(image.image_id);
+            persistImageCaption(image, caption);
+          }, 250),
+        );
+      }
+      function flushImageCaption(g, i, imageIndex, caption) {
+        const article = groups[g]?.items?.[i];
+        const image = getArticleImages(article, g, i)[imageIndex];
+        if (!image) return;
+        clearTimeout(imageCaptionTimers.get(image.image_id));
+        imageCaptionTimers.delete(image.image_id);
+        persistImageCaption(image, caption);
+      }
+      function moveArticleImage(g, i, imageIndex, direction) {
+        const article = groups[g]?.items?.[i];
+        const images = getArticleImages(article, g, i);
+        const target = imageIndex + direction;
+        if (!images[imageIndex] || target < 0 || target >= images.length) return;
+        [images[imageIndex], images[target]] = [images[target], images[imageIndex]];
+        const contentId = images[0].content_id;
+        const saved = updateArticleImageState(contentId, (state) => {
+          state.order = images.map((image) => image.image_id);
+        });
+        if (saved) refreshImageManager(contentId);
+      }
+      function deleteArticleImage(g, i, imageIndex) {
+        const article = groups[g]?.items?.[i];
+        const images = getArticleImages(article, g, i);
+        const image = images[imageIndex];
+        if (!image || !confirm("确定删除这张图片吗？正文不会受到影响。")) return;
+        const saved = updateArticleImageState(image.content_id, (state) => {
+          if (image.source === "official") {
+            if (!state.hidden.includes(image.image_id)) {
+              state.hidden.push(image.image_id);
+            }
+          } else {
+            state.uploads = state.uploads.filter(
+              (item) => item.image_id !== image.image_id,
+            );
+          }
+          state.order = state.order.filter(
+            (imageId) => imageId !== image.image_id,
+          );
+          delete state.captions[image.image_id];
+        });
+        if (saved) {
+          refreshImageManager(image.content_id);
+          toast("图片已删除");
+        }
+      }
+      function closeImageViewer() {
+        document.querySelector(".image-viewer")?.remove();
+        document.body.classList.remove("viewing-image");
       }
       function id(g, i) {
         return g + "-" + i;
       }
+      function isStableContentId(value) {
+        return typeof value === "string" && value.startsWith("content_");
+      }
+      function createContentId() {
+        let contentId = "";
+        do {
+          const random =
+            globalThis.crypto?.randomUUID?.().replace(/-/g, "") ||
+            Math.random().toString(36).slice(2) + Date.now().toString(36);
+          contentId = `content_user_${random}`;
+        } while (allDocs().some(({ x }) => x.content_id === contentId));
+        return contentId;
+      }
+      function ensureStableContentId(g, i) {
+        const article = groups[g]?.items?.[i];
+        if (!article) return "";
+        if (isStableContentId(article.content_id)) return article.content_id;
+        const oldId = article.content_id || id(g, i);
+        const contentId = createContentId();
+        article.content_id = contentId;
+        favs = favs.map((value) => (value === oldId ? contentId : value));
+        recent = recent.map((value) => (value === oldId ? contentId : value));
+        if (Object.prototype.hasOwnProperty.call(articleImageState, oldId)) {
+          articleImageState[contentId] = articleImageState[oldId];
+          if (Array.isArray(articleImageState[contentId]?.uploads)) {
+            articleImageState[contentId].uploads.forEach((image) => {
+              image.content_id = contentId;
+            });
+          }
+          delete articleImageState[oldId];
+          localStorage.setItem(IKEY, JSON.stringify(articleImageState));
+        }
+        save();
+        return contentId;
+      }
+      function findMatchIndex(list, candidate, fallbackIndex, used) {
+        let index = -1;
+        if (candidate?.category_id) {
+          index = list.findIndex(
+            (item, i) =>
+              !used.has(i) && item?.category_id === candidate.category_id,
+          );
+        }
+        if (index < 0 && candidate?.content_id) {
+          index = list.findIndex(
+            (item, i) =>
+              !used.has(i) && item?.content_id === candidate.content_id,
+          );
+        }
+        if (index < 0 && candidate?.title) {
+          index = list.findIndex(
+            (item, i) => !used.has(i) && item?.title === candidate.title,
+          );
+        }
+        if (
+          index < 0 &&
+          Number.isInteger(fallbackIndex) &&
+          list[fallbackIndex] &&
+          !used.has(fallbackIndex)
+        ) {
+          index = fallbackIndex;
+        }
+        return index;
+      }
+      function mergeGroupItems(storedGroup, baseGroup) {
+        const baseItems = baseGroup.items || [];
+        const usedBaseItems = new Set();
+        const items = (storedGroup.items || []).map((storedItem, ii) => {
+          const baseIndex = findMatchIndex(
+            baseItems,
+            storedItem,
+            storedItem?.content_id ? null : ii,
+            usedBaseItems,
+          );
+          if (baseIndex < 0) return structuredClone(storedItem);
+          usedBaseItems.add(baseIndex);
+          const baseItem = baseItems[baseIndex];
+          return {
+            ...structuredClone(baseItem),
+            ...storedItem,
+            content_id: baseItem.content_id || storedItem.content_id,
+          };
+        });
+        baseItems.forEach((baseItem, ii) => {
+          if (!usedBaseItems.has(ii)) items.push(structuredClone(baseItem));
+        });
+        return items;
+      }
+      function mergeOriginalData(stored) {
+        if (!Array.isArray(stored)) return structuredClone(ORIGINAL_DATA);
+        const usedBaseGroups = new Set();
+        const merged = stored.map((storedGroup, gi) => {
+          const baseIndex = findMatchIndex(
+            ORIGINAL_DATA,
+            storedGroup,
+            storedGroup?.category_id ? null : gi,
+            usedBaseGroups,
+          );
+          if (baseIndex < 0) return structuredClone(storedGroup);
+          usedBaseGroups.add(baseIndex);
+          const baseGroup = ORIGINAL_DATA[baseIndex];
+          return {
+            ...structuredClone(baseGroup),
+            ...storedGroup,
+            category_id: baseGroup.category_id || storedGroup.category_id,
+            items: mergeGroupItems(storedGroup, baseGroup),
+          };
+        });
+        ORIGINAL_DATA.forEach((baseGroup, gi) => {
+          if (!usedBaseGroups.has(gi)) merged.push(structuredClone(baseGroup));
+        });
+        return merged;
+      }
       function hydrateGroups() {
         groups = groups.map((g, gi) => {
-          const baseGroup = ORIGINAL_DATA[gi] || {};
+          const baseGroup =
+            ORIGINAL_DATA.find(
+              (candidate) =>
+                g.category_id && candidate.category_id === g.category_id,
+            ) ||
+            ORIGINAL_DATA.find((candidate) => candidate.title === g.title) ||
+            {};
           const baseItems = baseGroup.items || [];
           return {
             ...baseGroup,
@@ -39,7 +782,14 @@ const KEY = "zy_kb_system_v2",
             category_id:
               g.category_id || baseGroup.category_id || `group_${gi}`,
             items: (g.items || []).map((x, ii) => {
-              const baseItem = baseItems[ii] || {};
+              const baseItem =
+                baseItems.find(
+                  (candidate) =>
+                    x.content_id && candidate.content_id === x.content_id,
+                ) ||
+                baseItems.find((candidate) => candidate.title === x.title) ||
+                (!x.content_id ? baseItems[ii] : null) ||
+                {};
               return {
                 ...baseItem,
                 ...x,
@@ -57,7 +807,7 @@ const KEY = "zy_kb_system_v2",
         if (typeof raw !== "string") return null;
         const value = raw.trim();
         if (!value) return null;
-        if (value.startsWith("content_cat_")) return value;
+        if (value.startsWith("content_")) return value;
         if (/^\d+-\d+$/.test(value)) {
           let [g, i] = value.split("-").map(Number);
           let x = groups[g]?.items?.[i];
@@ -80,7 +830,7 @@ const KEY = "zy_kb_system_v2",
       function resolveStoredIdRecord(k) {
         let normalized = normalizeStoredId(k);
         if (!normalized) return null;
-        if (normalized.startsWith("content_cat_")) {
+        if (normalized.startsWith("content_")) {
           for (let g = 0; g < groups.length; g++) {
             for (let i = 0; i < groups[g].items.length; i++) {
               let x = groups[g].items[i];
@@ -112,6 +862,10 @@ const KEY = "zy_kb_system_v2",
         localStorage.setItem(KEY, JSON.stringify(groups));
         localStorage.setItem(FKEY, JSON.stringify(favs));
         localStorage.setItem(RKEY, JSON.stringify(recent));
+        if (needsDataVersionWrite) {
+          localStorage.setItem(DATA_VERSION_KEY, DATA_VERSION);
+          needsDataVersionWrite = false;
+        }
         renderNav();
       }
       function copyText(s) {
@@ -190,14 +944,23 @@ const KEY = "zy_kb_system_v2",
         renderDoc();
       }
       function renderDoc() {
+        if (editing) ensureStableContentId(activeG, activeI);
         let x = groups[activeG]?.items[activeI];
         if (!x) {
           $("#main").innerHTML = '<div class="empty">请选择内容</div>';
           return;
         }
         let text = x.paragraphs.join("\n\n");
+        let images = renderArticleImages(
+          getArticleImages(x, activeG, activeI),
+          x.title,
+        );
+        let body =
+          x.format === "markdown"
+            ? `<div class="markdown-body">${renderMarkdown(text, x.title)}</div>`
+            : `<div class="readview">${esc(text)}</div>`;
         $("#main").innerHTML =
-          `<div class="topbar"><div class="crumb">${esc(groups[activeG].title)} / ${editing ? "编辑内容" : "查看内容"}</div><div class="tools"><button class="btn" onclick="toggleFav(${activeG},${activeI})">${favs.includes(getContentId(activeG, activeI)) ? "★ 已收藏" : "☆ 收藏"}</button><button class="btn" onclick="copyCurrent()">复制</button><button class="btn primary" onclick="toggleEdit()">${editing ? "完成编辑" : "编辑"}</button><button class="btn danger" onclick="deleteCurrent()">删除</button></div></div><div class="paper">${editing ? `<input class="titleinput" id="titleEdit" value="${esc(x.title)}"><textarea class="contentarea" id="bodyEdit">${esc(text)}</textarea>` : `<h1 style="margin:0;border-bottom:1px solid var(--line);padding-bottom:12px">${esc(x.title)}</h1><div class="readview">${esc(text)}</div>`}</div>`;
+          `<div class="topbar"><div class="crumb">${esc(groups[activeG].title)} / ${editing ? "编辑内容" : "查看内容"}</div><div class="tools"><button class="btn" onclick="toggleFav(${activeG},${activeI})">${favs.includes(getContentId(activeG, activeI)) ? "★ 已收藏" : "☆ 收藏"}</button><button class="btn" onclick="copyCurrent()">复制</button><button class="btn primary" onclick="toggleEdit()">${editing ? "完成编辑" : "编辑"}</button><button class="btn danger" onclick="deleteCurrent()">删除</button></div></div><div class="paper">${editing ? `<div class="article-editor"><input class="titleinput" id="titleEdit" value="${esc(x.title)}"><textarea class="contentarea" id="bodyEdit">${esc(text)}</textarea>${renderImageManager(activeG, activeI)}</div>` : `<h1 style="margin:0;border-bottom:1px solid var(--line);padding-bottom:12px">${esc(x.title)}</h1>${images}${body}`}</div>`;
       }
       function toggleEdit() {
         if (editing) {
@@ -261,6 +1024,7 @@ const KEY = "zy_kb_system_v2",
         if (mode !== "group") return;
         groups[activeG].items.push({
           title: "新内容",
+          content_id: createContentId(),
           paragraphs: ["请在这里输入内容。"],
         });
         activeI = groups[activeG].items.length - 1;
@@ -287,7 +1051,25 @@ const KEY = "zy_kb_system_v2",
         setTimeout(() => URL.revokeObjectURL(a.href), 500);
       }
       function exportData() {
-        download("智源AI客服知识库备份.json", JSON.stringify(groups, null, 2));
+        const exportGroups = structuredClone(groups);
+        exportGroups.forEach((group, gi) => {
+          group.items.forEach((article, ii) => {
+            const images = getArticleImages(groups[gi]?.items?.[ii], gi, ii);
+            if (!images.length) return;
+            article.images = images.map((image) => ({
+              image_id: image.image_id,
+              content_id: image.content_id,
+              src: image.src,
+              alt: image.alt,
+              caption: image.caption,
+              file_name: image.file_name,
+            }));
+          });
+        });
+        download(
+          "智源AI客服知识库备份.json",
+          JSON.stringify(exportGroups, null, 2),
+        );
       }
       function importData() {
         let i = document.createElement("input");
@@ -297,7 +1079,9 @@ const KEY = "zy_kb_system_v2",
           let r = new FileReader();
           r.onload = () => {
             try {
-              groups = JSON.parse(r.result);
+              const importedGroups = JSON.parse(r.result);
+              if (!Array.isArray(importedGroups)) throw new Error("invalid data");
+              groups = mergeOriginalData(importedGroups);
               save();
               showHome();
               toast("导入成功");
@@ -324,6 +1108,9 @@ const KEY = "zy_kb_system_v2",
         else if (mode === "fav") showFavs();
         else if (mode === "recent") showRecent();
         else openGroup(activeG);
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeImageViewer();
       });
       renderNav();
       showHome();
