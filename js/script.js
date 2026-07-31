@@ -2,6 +2,7 @@ const KEY = "zy_kb_system_v2",
         FKEY = "zy_kb_favs_v2",
         RKEY = "zy_kb_recent_v2",
         IKEY = "zy_kb_article_images_v2",
+        CATEGORY_ORDER_KEY = "zy_kb_category_order_v1",
         DATA_VERSION_KEY = "zy_kb_default_data_version_v2",
         DATA_BACKUP_KEY = "zy_kb_system_v2_pre_document_pack_backup",
         DATA_VERSION = "document-pack-2026-07-22";
@@ -17,6 +18,7 @@ const KEY = "zy_kb_system_v2",
         groups = mergeOriginalData(storedGroups);
       }
       hydrateGroups();
+      let categoryOrder = loadCategoryOrder();
       let favs = normalizeStoredIds(JSON.parse(localStorage.getItem(FKEY) || "[]"));
       let recent = normalizeStoredIds(JSON.parse(localStorage.getItem(RKEY) || "[]"));
       const storedArticleImages = JSON.parse(localStorage.getItem(IKEY) || "{}");
@@ -46,6 +48,8 @@ const KEY = "zy_kb_system_v2",
         status: "all",
         sort: "custom",
       };
+      let categoryDragState = null;
+      let categoryScrollObserver = null;
       const $ = (s) => document.querySelector(s);
       save();
       function esc(s) {
@@ -1272,6 +1276,346 @@ const KEY = "zy_kb_system_v2",
         clearTimeout(window.tt);
         window.tt = setTimeout(() => t.classList.remove("show"), 1200);
       }
+      function loadCategoryOrder() {
+        try {
+          const parsed = JSON.parse(
+            localStorage.getItem(CATEGORY_ORDER_KEY) || "[]",
+          );
+          if (!Array.isArray(parsed)) return [];
+          const seen = new Set();
+          return parsed
+            .map((value) => (typeof value === "string" ? value.trim() : ""))
+            .filter((value) => {
+              if (!value || seen.has(value)) return false;
+              seen.add(value);
+              return true;
+            });
+        } catch (error) {
+          return [];
+        }
+      }
+      function getCategoryOrderId(group, index) {
+        return String(group?.category_id || `group_${index}`);
+      }
+      function getOrderedGroupIndexes() {
+        const ordered = [];
+        const used = new Set();
+        categoryOrder.forEach((categoryId) => {
+          const index = groups.findIndex(
+            (group, gi) =>
+              !used.has(gi) &&
+              getCategoryOrderId(group, gi) === categoryId,
+          );
+          if (index < 0) return;
+          used.add(index);
+          ordered.push(index);
+        });
+        groups.forEach((group, gi) => {
+          if (!used.has(gi)) ordered.push(gi);
+        });
+        return ordered;
+      }
+      function persistCategoryOrder(indexes) {
+        const seen = new Set();
+        categoryOrder = indexes
+          .map((gi) => getCategoryOrderId(groups[gi], gi))
+          .filter((categoryId) => {
+            if (!categoryId || seen.has(categoryId)) return false;
+            seen.add(categoryId);
+            return true;
+          });
+        try {
+          localStorage.setItem(
+            CATEGORY_ORDER_KEY,
+            JSON.stringify(categoryOrder),
+          );
+          return true;
+        } catch (error) {
+          toast("分类顺序保存失败");
+          return false;
+        }
+      }
+      function createCategoryId() {
+        let categoryId = "";
+        do {
+          const suffix =
+            globalThis.crypto?.randomUUID?.().replace(/-/g, "") ||
+            `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+          categoryId = `category_user_${suffix}`;
+        } while (
+          groups.some((group, gi) =>
+            getCategoryOrderId(group, gi) === categoryId
+          )
+        );
+        return categoryId;
+      }
+      function isCompactSidebar() {
+        return window.matchMedia("(max-width: 950px)").matches;
+      }
+      function updateCategoryScrollControls() {
+        const section = $(".category-section");
+        const scroller = $("#categoryScroll");
+        if (!section || !scroller) return;
+        const overflow =
+          !isCompactSidebar() &&
+          scroller.scrollHeight > scroller.clientHeight + 2;
+        const canScrollUp = overflow && scroller.scrollTop > 1;
+        const canScrollDown =
+          overflow &&
+          scroller.scrollTop + scroller.clientHeight <
+            scroller.scrollHeight - 1;
+        section.classList.toggle("has-overflow", overflow);
+        const up = $(".category-scroll-up");
+        const down = $(".category-scroll-down");
+        up?.classList.toggle("can-scroll", canScrollUp);
+        down?.classList.toggle("can-scroll", canScrollDown);
+        if (up) up.disabled = !canScrollUp;
+        if (down) down.disabled = !canScrollDown;
+      }
+      function scrollCategoryList(direction) {
+        const scroller = $("#categoryScroll");
+        if (!scroller || isCompactSidebar()) return;
+        scroller.scrollBy({
+          top:
+            Math.sign(direction) *
+            Math.max(110, Math.round(scroller.clientHeight * 0.58)),
+          behavior: "smooth",
+        });
+      }
+      function keepCategoryVisible(groupIndex) {
+        const row = document.querySelector(
+          `.category-row[data-group-index="${groupIndex}"]`,
+        );
+        if (!row) return;
+        const scroller = isCompactSidebar()
+          ? $(".sidebar")
+          : $("#categoryScroll");
+        if (!scroller) return;
+        const rowRect = row.getBoundingClientRect();
+        const scrollerRect = scroller.getBoundingClientRect();
+        if (isCompactSidebar()) {
+          if (rowRect.left < scrollerRect.left) {
+            scroller.scrollLeft -= scrollerRect.left - rowRect.left;
+          } else if (rowRect.right > scrollerRect.right) {
+            scroller.scrollLeft += rowRect.right - scrollerRect.right;
+          }
+        } else if (rowRect.top < scrollerRect.top) {
+          scroller.scrollTop -= scrollerRect.top - rowRect.top;
+        } else if (rowRect.bottom > scrollerRect.bottom) {
+          scroller.scrollTop += rowRect.bottom - scrollerRect.bottom;
+        }
+        updateCategoryScrollControls();
+      }
+      function initCategoryScroller() {
+        const scroller = $("#categoryScroll");
+        const cats = $("#cats");
+        if (!scroller || !cats) return;
+        scroller.addEventListener("scroll", updateCategoryScrollControls, {
+          passive: true,
+        });
+        if (typeof ResizeObserver === "function") {
+          categoryScrollObserver?.disconnect();
+          categoryScrollObserver = new ResizeObserver(
+            updateCategoryScrollControls,
+          );
+          categoryScrollObserver.observe(scroller);
+          categoryScrollObserver.observe(cats);
+        }
+        updateCategoryScrollControls();
+      }
+      function clearCategoryDropIndicators() {
+        document
+          .querySelectorAll(
+            ".category-row.is-dragging, .category-row.drop-before, .category-row.drop-after",
+          )
+          .forEach((row) =>
+            row.classList.remove(
+              "is-dragging",
+              "drop-before",
+              "drop-after",
+            ),
+          );
+      }
+      function activateCategoryDrag() {
+        if (!categoryDragState || categoryDragState.active) return;
+        categoryDragState.active = true;
+        categoryDragState.handle.setAttribute("aria-grabbed", "true");
+        document
+          .querySelector(
+            `.category-row[data-group-index="${categoryDragState.sourceIndex}"]`,
+          )
+          ?.classList.add("is-dragging");
+      }
+      function startCategoryDrag(event, groupIndex) {
+        if (
+          (event.pointerType === "mouse" && event.button !== 0) ||
+          categoryDragState
+        ) {
+          return;
+        }
+        event.stopPropagation();
+        if (event.pointerType === "mouse") event.preventDefault();
+        const handle = event.currentTarget;
+        categoryDragState = {
+          pointerId: event.pointerId,
+          pointerType: event.pointerType,
+          handle,
+          sourceIndex: groupIndex,
+          targetIndex: null,
+          after: false,
+          active: false,
+          startX: event.clientX,
+          startY: event.clientY,
+          timer: null,
+        };
+        handle.setPointerCapture?.(event.pointerId);
+        if (event.pointerType === "touch") {
+          categoryDragState.timer = setTimeout(activateCategoryDrag, 320);
+        } else {
+          activateCategoryDrag();
+        }
+      }
+      function updateCategoryDropTarget(clientX, clientY) {
+        if (!categoryDragState?.active) return;
+        const rows = [...document.querySelectorAll(".category-row")];
+        if (!rows.length) return;
+        const horizontal = isCompactSidebar();
+        const pointerPosition = horizontal ? clientX : clientY;
+        const target = rows.reduce((nearest, row) => {
+          const rect = row.getBoundingClientRect();
+          const center = horizontal
+            ? rect.left + rect.width / 2
+            : rect.top + rect.height / 2;
+          const distance = Math.abs(pointerPosition - center);
+          return !nearest || distance < nearest.distance
+            ? { row, rect, center, distance }
+            : nearest;
+        }, null);
+        clearCategoryDropIndicators();
+        document
+          .querySelector(
+            `.category-row[data-group-index="${categoryDragState.sourceIndex}"]`,
+          )
+          ?.classList.add("is-dragging");
+        const targetIndex = Number(target.row.dataset.groupIndex);
+        if (
+          !Number.isInteger(targetIndex) ||
+          targetIndex === categoryDragState.sourceIndex
+        ) {
+          categoryDragState.targetIndex = null;
+          return;
+        }
+        const after = pointerPosition > target.center;
+        categoryDragState.targetIndex = targetIndex;
+        categoryDragState.after = after;
+        target.row.classList.add(after ? "drop-after" : "drop-before");
+      }
+      function autoScrollCategories(clientX, clientY) {
+        if (!categoryDragState?.active) return;
+        const scroller = isCompactSidebar()
+          ? $(".sidebar")
+          : $("#categoryScroll");
+        if (!scroller) return;
+        const rect = scroller.getBoundingClientRect();
+        const horizontal = isCompactSidebar();
+        const position = horizontal ? clientX : clientY;
+        const start = horizontal ? rect.left : rect.top;
+        const end = horizontal ? rect.right : rect.bottom;
+        const edge = Math.min(44, (end - start) / 4);
+        let delta = 0;
+        if (position < start + edge) delta = -14;
+        else if (position > end - edge) delta = 14;
+        if (!delta) return;
+        scroller.scrollBy(
+          horizontal ? { left: delta } : { top: delta },
+        );
+        updateCategoryScrollControls();
+      }
+      function handleCategoryPointerMove(event) {
+        if (
+          !categoryDragState ||
+          event.pointerId !== categoryDragState.pointerId
+        ) {
+          return;
+        }
+        if (!categoryDragState.active) {
+          const distance = Math.hypot(
+            event.clientX - categoryDragState.startX,
+            event.clientY - categoryDragState.startY,
+          );
+          if (distance > 10) finishCategoryDrag(event, false);
+          return;
+        }
+        event.preventDefault();
+        autoScrollCategories(event.clientX, event.clientY);
+        updateCategoryDropTarget(event.clientX, event.clientY);
+      }
+      function moveCategory(sourceIndex, targetIndex, after) {
+        const order = getOrderedGroupIndexes();
+        const sourcePosition = order.indexOf(sourceIndex);
+        if (sourcePosition < 0 || !order.includes(targetIndex)) return;
+        order.splice(sourcePosition, 1);
+        const targetPosition = order.indexOf(targetIndex);
+        order.splice(targetPosition + (after ? 1 : 0), 0, sourceIndex);
+        const saved = persistCategoryOrder(order);
+        renderNav(
+          (mode === "group" || mode === "gallery") ? activeG : sourceIndex,
+        );
+        if (saved) toast("分类顺序已保存");
+      }
+      function finishCategoryDrag(event, commit = true) {
+        if (
+          !categoryDragState ||
+          (event?.pointerId != null &&
+            event.pointerId !== categoryDragState.pointerId)
+        ) {
+          return;
+        }
+        const state = categoryDragState;
+        clearTimeout(state.timer);
+        if (
+          commit &&
+          state.active &&
+          Number.isInteger(state.targetIndex)
+        ) {
+          moveCategory(
+            state.sourceIndex,
+            state.targetIndex,
+            state.after,
+          );
+        }
+        state.handle.setAttribute("aria-grabbed", "false");
+        if (state.handle.hasPointerCapture?.(state.pointerId)) {
+          state.handle.releasePointerCapture(state.pointerId);
+        }
+        categoryDragState = null;
+        clearCategoryDropIndicators();
+      }
+      function handleCategoryHandleKeydown(event, groupIndex) {
+        const backward = ["ArrowUp", "ArrowLeft"].includes(event.key);
+        const forward = ["ArrowDown", "ArrowRight"].includes(event.key);
+        if (!backward && !forward) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const order = getOrderedGroupIndexes();
+        const position = order.indexOf(groupIndex);
+        const nextPosition = position + (backward ? -1 : 1);
+        if (position < 0 || nextPosition < 0 || nextPosition >= order.length) {
+          return;
+        }
+        moveCategory(
+          groupIndex,
+          order[nextPosition],
+          forward,
+        );
+        requestAnimationFrame(() =>
+          document
+            .querySelector(
+              `.category-row[data-group-index="${groupIndex}"] .category-drag-handle`,
+            )
+            ?.focus(),
+        );
+      }
       function save() {
         hydrateGroups();
         favs = normalizeStoredIds(favs);
@@ -1309,15 +1653,24 @@ const KEY = "zy_kb_system_v2",
           .querySelectorAll(".navbtn[data-mode]")
           .forEach((x) => x.classList.toggle("on", x.dataset.mode === m));
       }
-      function renderNav() {
+      function renderNav(visibleGroupIndex = null) {
         let total = 0;
-        $("#cats").innerHTML = groups
-          .map((g, gi) => {
+        $("#cats").innerHTML = getOrderedGroupIndexes()
+          .map((gi) => {
+            const g = groups[gi];
             total += g.items.length;
-            return `<button class="navbtn ${(mode === "group" || mode === "gallery") && gi === activeG ? "on" : ""}" onclick="openGroup(${gi})">📁 ${esc(g.title)} <em>${g.items.length}</em></button>`;
+            const label = `拖动调整“${g.title}”分类顺序`;
+            return `<div class="category-row" data-group-index="${gi}" data-category-id="${esc(getCategoryOrderId(g, gi))}"><button type="button" class="navbtn category-open ${(mode === "group" || mode === "gallery") && gi === activeG ? "on" : ""}" onclick="openGroup(${gi})"><span class="category-name">📁 ${esc(g.title)}</span><em>${g.items.length}</em></button><button type="button" class="category-drag-handle" aria-label="${esc(label)}" title="拖动调整分类顺序" aria-grabbed="false" onpointerdown="startCategoryDrag(event,${gi})" onkeydown="handleCategoryHandleKeydown(event,${gi})" onclick="event.preventDefault();event.stopPropagation()">⠿</button></div>`;
           })
           .join("");
         $("#favCount").textContent = favs.length;
+        requestAnimationFrame(() => {
+          updateCategoryScrollControls();
+          const targetIndex =
+            visibleGroupIndex ??
+            ((mode === "group" || mode === "gallery") ? activeG : null);
+          if (Number.isInteger(targetIndex)) keepCategoryVisible(targetIndex);
+        });
       }
       
       
@@ -1423,7 +1776,12 @@ const KEY = "zy_kb_system_v2",
       function addGroup() {
         let n = prompt("请输入分类名称", "新分类");
         if (!n) return;
-        groups.push({ title: n, items: [] });
+        groups.push({
+          title: n,
+          category_id: createCategoryId(),
+          items: [],
+        });
+        persistCategoryOrder(getOrderedGroupIndexes());
         save();
         openGroup(groups.length - 1);
       }
@@ -1530,11 +1888,22 @@ const KEY = "zy_kb_system_v2",
         if (!event.target.closest(".gallery-more")) closeGalleryMenus();
       });
       window.addEventListener("resize", () => closeGalleryMenus());
+      window.addEventListener("resize", updateCategoryScrollControls);
+      document.addEventListener("pointermove", handleCategoryPointerMove, {
+        passive: false,
+      });
+      document.addEventListener("pointerup", (event) =>
+        finishCategoryDrag(event),
+      );
+      document.addEventListener("pointercancel", (event) =>
+        finishCategoryDrag(event, false),
+      );
       $(".main")?.addEventListener("scroll", () => {
         const openMenu = document.querySelector(".gallery-more[open]");
         if (openMenu) {
           requestAnimationFrame(() => positionGalleryMenu(openMenu));
         }
       });
+      initCategoryScroller();
       renderNav();
       showHome();

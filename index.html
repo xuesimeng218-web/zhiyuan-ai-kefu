@@ -8,7 +8,7 @@
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>智源客服知识库</title>
-    <link rel="stylesheet" href="css/style.css?v=20260731-4" />
+    <link rel="stylesheet" href="css/style.css?v=20260731-5" />
     <link rel="manifest" href="manifest.webmanifest" />
     <meta name="theme-color" content="#6750d8" />
     <link rel="icon" href="icon.svg" type="image/svg+xml" />
@@ -17,18 +17,42 @@
   <body>
     <div class="app">
       <aside class="sidebar">
-        <div class="brand">
-          <b>智源客服知识库</b><span>知识库 / 话术 / 售后 / 培训</span>
+        <div class="sidebar-top">
+          <div class="brand">
+            <b>智源客服知识库</b><span>知识库 / 话术 / 售后 / 培训</span>
+          </div>
+          <button class="navbtn on" data-mode="home" onclick="showHome()">
+            🏠 首页</button
+          ><button class="navbtn" data-mode="fav" onclick="showFavs()">
+            ⭐ 收藏 <em id="favCount">0</em></button
+          ><button class="navbtn" data-mode="recent" onclick="showRecent()">
+            🕘 最近使用
+          </button>
         </div>
-        <button class="navbtn on" data-mode="home" onclick="showHome()">
-          🏠 首页</button
-        ><button class="navbtn" data-mode="fav" onclick="showFavs()">
-          ⭐ 收藏 <em id="favCount">0</em></button
-        ><button class="navbtn" data-mode="recent" onclick="showRecent()">
-          🕘 最近使用
-        </button>
-        <div class="navtitle">知识分类</div>
-        <div id="cats"></div>
+        <section class="category-section" aria-label="知识分类">
+          <button
+            type="button"
+            class="category-scroll-button category-scroll-up"
+            aria-label="向上滚动知识分类"
+            title="向上滚动"
+            onclick="scrollCategoryList(-1)"
+          >
+            ↑
+          </button>
+          <div class="category-scroll" id="categoryScroll">
+            <div class="navtitle">知识分类</div>
+            <div id="cats"></div>
+          </div>
+          <button
+            type="button"
+            class="category-scroll-button category-scroll-down"
+            aria-label="向下滚动知识分类"
+            title="向下滚动"
+            onclick="scrollCategoryList(1)"
+          >
+            ↓
+          </button>
+        </section>
         <div class="sideactions">
           <button onclick="addGroup()">＋分类</button
           ><button onclick="exportData()">导出</button
@@ -60,6 +84,6 @@
     <script src="data/data.js"></script>
     <script src="js/calculator.js"></script>
     <script src="js/search.js"></script>
-    <script src="js/script.js?v=20260731-4"></script>
+    <script src="js/script.js?v=20260731-5"></script>
   </body>
 </html>

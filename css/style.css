@@ -44,7 +44,14 @@
         background: var(--dark);
         color: #fff;
         padding: 16px 12px;
-        overflow: auto;
+        display: flex;
+        min-width: 0;
+        min-height: 0;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .sidebar-top {
+        flex: 0 0 auto;
       }
       .brand {
         padding: 2px 10px 16px;
@@ -87,8 +94,130 @@
         font-size: 11px;
         color: #8f99ad;
       }
+      .category-section {
+        display: flex;
+        min-width: 0;
+        min-height: 0;
+        flex: 1 1 auto;
+        flex-direction: column;
+      }
+      .category-scroll {
+        min-width: 0;
+        min-height: 0;
+        flex: 1 1 auto;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-color: #566074 transparent;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
+      }
+      .category-scroll::-webkit-scrollbar {
+        width: 6px;
+      }
+      .category-scroll::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: #566074;
+      }
+      #cats {
+        min-width: 0;
+      }
+      .category-row {
+        position: relative;
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        border-radius: 9px;
+      }
+      .category-row .category-open {
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+      .category-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .category-drag-handle {
+        display: grid;
+        width: 30px;
+        height: 34px;
+        flex: 0 0 30px;
+        place-items: center;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: #7f899d;
+        cursor: grab;
+        font-size: 18px;
+        line-height: 1;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .category-drag-handle:hover,
+      .category-drag-handle:focus-visible {
+        outline: none;
+        background: #343b4b;
+        color: #fff;
+      }
+      .category-drag-handle:active {
+        cursor: grabbing;
+      }
+      .category-row.is-dragging {
+        background: rgba(132, 111, 240, 0.18);
+        opacity: 0.72;
+      }
+      .category-row.drop-before::before,
+      .category-row.drop-after::after {
+        content: "";
+        position: absolute;
+        right: 5px;
+        left: 5px;
+        z-index: 2;
+        height: 2px;
+        border-radius: 999px;
+        background: #a99bf8;
+        box-shadow: 0 0 0 1px rgba(32, 38, 52, 0.65);
+      }
+      .category-row.drop-before::before {
+        top: -1px;
+      }
+      .category-row.drop-after::after {
+        bottom: -1px;
+      }
+      .category-scroll-button {
+        display: none;
+        height: 25px;
+        flex: 0 0 25px;
+        align-items: center;
+        justify-content: center;
+        border: 0;
+        border-radius: 7px;
+        background: #2a3140;
+        color: #aeb6c7;
+        cursor: pointer;
+        line-height: 1;
+      }
+      .category-section.has-overflow .category-scroll-button {
+        display: flex;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      .category-section.has-overflow .category-scroll-button.can-scroll {
+        visibility: visible;
+        pointer-events: auto;
+      }
+      .category-scroll-button:hover,
+      .category-scroll-button:focus-visible {
+        outline: none;
+        background: #3a4356;
+        color: #fff;
+      }
       .sideactions {
         display: grid;
+        flex: 0 0 auto;
         grid-template-columns: 1fr 1fr;
         gap: 6px;
         padding: 10px 4px;
@@ -1069,10 +1198,47 @@
           position: sticky;
           top: 0;
           z-index: 20;
+          height: auto;
           padding: 8px;
-          display: flex;
+          flex-direction: row;
           align-items: center;
-          overflow: auto;
+          overflow-x: auto;
+          overflow-y: hidden;
+        }
+        .sidebar-top {
+          display: flex;
+          flex: 0 0 auto;
+          align-items: center;
+        }
+        .category-section {
+          display: block;
+          min-height: auto;
+          flex: 0 0 auto;
+        }
+        .category-scroll {
+          display: flex;
+          overflow: visible;
+        }
+        #cats {
+          display: flex;
+        }
+        .category-row {
+          flex: 0 0 auto;
+        }
+        .category-row.drop-before::before,
+        .category-row.drop-after::after {
+          top: 5px;
+          bottom: 5px;
+          width: 2px;
+          height: auto;
+        }
+        .category-row.drop-before::before {
+          right: auto;
+          left: -1px;
+        }
+        .category-row.drop-after::after {
+          right: -1px;
+          left: auto;
         }
         .brand {
           padding: 0 8px;
@@ -1080,13 +1246,17 @@
         }
         .brand span,
         .navtitle,
-        .sideactions {
+        .sideactions,
+        .category-scroll-button {
           display: none;
         }
         .navbtn {
           width: auto;
           white-space: nowrap;
           padding: 8px 10px;
+        }
+        .category-name {
+          overflow: visible;
         }
         .middle {
           border-right: 0;
