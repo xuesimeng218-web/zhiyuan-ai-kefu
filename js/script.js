@@ -417,12 +417,27 @@ const KEY = "zy_kb_system_v2",
         if (!article) return "";
         const contentId = getContentId(g, i);
         const images = getArticleImages(article, g, i);
-        return `<section class="image-manager"><div class="image-manager-head"><div><h2>文章图片</h2><p>图片独立保存，并与当前文章 ID <code>${esc(contentId)}</code> 关联。</p></div><label class="btn image-upload-button">选择图片<input id="articleImageUpload" class="image-upload-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple onchange="addArticleImages(event)"></label></div>${images.length ? `<div class="image-manager-grid">${images
+        return `<section class="image-manager" data-content-id="${esc(contentId)}" tabindex="0" onpaste="pasteArticleImages(event)" aria-label="文章图片管理区，可粘贴图片"><div class="image-manager-head"><div><h2>文章图片</h2><p>图片独立保存，并与当前文章 ID <code>${esc(contentId)}</code> 关联。</p><p class="image-paste-hint">点击此区域后按 Command+V / Ctrl+V，可直接粘贴从微信复制的图片。</p></div><label class="btn image-upload-button">选择图片<input class="image-upload-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple onchange="addArticleImages(event)"></label></div>${images.length ? `<div class="image-manager-grid">${images
           .map(
             (image, index) =>
-              `<article class="image-manager-card"><button type="button" class="image-manager-preview" onclick="openImage(${g},${i},${index})" aria-label="放大图片：${esc(image.alt)}"><img src="${esc(image.src)}" alt="${esc(image.alt)}" loading="lazy"></button><div class="image-manager-meta"><span>${image.source === "official" ? "正式资料图片" : "浏览器上传"}</span><small>${index + 1} / ${images.length}</small></div><label>图片说明<input type="text" value="${esc(image.caption)}" placeholder="可填写图片说明" onchange="updateImageCaption(${g},${i},${index},this.value)"></label><div class="image-manager-actions"><button type="button" class="btn" onclick="moveArticleImage(${g},${i},${index},-1)" ${index === 0 ? "disabled" : ""}>上移</button><button type="button" class="btn" onclick="moveArticleImage(${g},${i},${index},1)" ${index === images.length - 1 ? "disabled" : ""}>下移</button><button type="button" class="btn danger" onclick="deleteArticleImage(${g},${i},${index})">删除</button></div></article>`,
+              `<article class="image-manager-card"><button type="button" class="image-manager-preview" onclick="openImage(${g},${i},${index})" aria-label="放大图片：${esc(image.alt)}"><img src="${esc(image.src)}" alt="${esc(image.alt)}" loading="lazy"></button><div class="image-manager-meta"><span>${image.source === "official" ? "正式资料图片" : "浏览器上传"}</span><small>${index + 1} / ${images.length}</small></div><label>图片说明<input type="text" value="${esc(image.caption)}" placeholder="可填写图片说明" oninput="scheduleImageCaption(${g},${i},${index},this.value)" onblur="flushImageCaption(${g},${i},${index},this.value)"></label><div class="image-manager-actions"><button type="button" class="btn" onclick="moveArticleImage(${g},${i},${index},-1)" ${index === 0 ? "disabled" : ""}>上移</button><button type="button" class="btn" onclick="moveArticleImage(${g},${i},${index},1)" ${index === images.length - 1 ? "disabled" : ""}>下移</button><button type="button" class="btn danger" onclick="deleteArticleImage(${g},${i},${index})">删除</button></div></article>`,
           )
-          .join("")}</div>` : '<div class="image-manager-empty">暂无图片。点击“选择图片”可一次添加多张。</div>'}</section>`;
+          .join("")}</div>` : '<div class="image-manager-empty">暂无图片。可选择图片，或点击此区域后直接粘贴图片。</div>'}</section>`;
+      }
+      function refreshImageManager(contentId, focusManager = false) {
+        const record = resolveStoredIdRecord(contentId);
+        const manager = document.querySelector(
+          `.image-manager[data-content-id="${CSS.escape(contentId)}"]`,
+        );
+        if (!record || !manager) return;
+        manager.outerHTML = renderImageManager(record.gi, record.ii);
+        if (focusManager) {
+          document
+            .querySelector(
+              `.image-manager[data-content-id="${CSS.escape(contentId)}"]`,
+            )
+            ?.focus();
+        }
       }
       function createImageId(contentId) {
         const random =
@@ -439,38 +454,63 @@ const KEY = "zy_kb_system_v2",
         });
       }
       function optimizeImageDataUrl(dataUrl, file) {
-        if (file.size <= 700 * 1024 || file.type === "image/gif") {
-          return Promise.resolve(dataUrl);
-        }
+        if (file.type === "image/gif") return Promise.resolve(dataUrl);
         return new Promise((resolve) => {
           const image = new Image();
           image.onload = () => {
             const maxSide = 1600;
-            const scale = Math.min(
+            const initialScale = Math.min(
               1,
               maxSide / Math.max(image.naturalWidth, image.naturalHeight),
             );
             const canvas = document.createElement("canvas");
-            canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-            canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
             const context = canvas.getContext("2d");
             if (!context) {
               resolve(dataUrl);
               return;
             }
-            context.drawImage(image, 0, 0, canvas.width, canvas.height);
-            const optimized = canvas.toDataURL("image/webp", 0.84);
-            resolve(optimized.length < dataUrl.length ? optimized : dataUrl);
+            const targetLength = 650 * 1024;
+            const qualities = [0.84, 0.72, 0.6];
+            let best = dataUrl;
+            for (let attempt = 0; attempt < 12; attempt += 1) {
+              const shrink = Math.pow(0.82, Math.floor(attempt / 3));
+              const scale = initialScale * shrink;
+              canvas.width = Math.max(
+                1,
+                Math.round(image.naturalWidth * scale),
+              );
+              canvas.height = Math.max(
+                1,
+                Math.round(image.naturalHeight * scale),
+              );
+              context.clearRect(0, 0, canvas.width, canvas.height);
+              context.drawImage(image, 0, 0, canvas.width, canvas.height);
+              const candidate = canvas.toDataURL(
+                "image/webp",
+                qualities[attempt % qualities.length],
+              );
+              if (candidate.length < best.length) best = candidate;
+              if (candidate.length <= targetLength) {
+                resolve(candidate.length < dataUrl.length ? candidate : dataUrl);
+                return;
+              }
+            }
+            resolve(best);
           };
           image.onerror = () => resolve(dataUrl);
           image.src = dataUrl;
         });
       }
-      async function addArticleImages(event) {
-        const input = event.currentTarget;
-        const files = [...(input.files || [])];
-        input.value = "";
+      async function processArticleImageFiles(rawFiles, contentId) {
+        const files = [...rawFiles];
         if (!files.length) return;
+        if (!isStableContentId(contentId)) return;
+        const record = resolveStoredIdRecord(contentId);
+        const article = record?.x;
+        if (!article || article.content_id !== contentId) {
+          alert("当前文章已发生变化，请重新打开文章后再添加图片。");
+          return;
+        }
         const allowed = /^(image\/(png|jpeg|gif|webp))$/i;
         if (files.some((file) => !allowed.test(file.type))) {
           alert("仅支持 PNG、JPG、GIF 和 WebP 图片。");
@@ -480,15 +520,12 @@ const KEY = "zy_kb_system_v2",
           alert("单张原图不能超过 12MB，请压缩后重试。");
           return;
         }
-        const contentId = ensureStableContentId(activeG, activeI);
-        const article = groups[activeG]?.items?.[activeI];
-        if (!article) return;
         try {
           const uploads = [];
           for (const file of files) {
             const raw = await readFileAsDataUrl(file);
             const src = await optimizeImageDataUrl(raw, file);
-            if (!safeImageSrc(src) || src.length > 2.5 * 1024 * 1024) {
+            if (!safeImageSrc(src) || src.length > 900 * 1024) {
               throw new Error("image too large");
             }
             uploads.push({
@@ -498,13 +535,17 @@ const KEY = "zy_kb_system_v2",
               src,
               alt: file.name || article.title,
               caption: "",
-              file_name: file.name || "浏览器上传图片",
+              file_name: file.name || "剪贴板图片",
             });
           }
+          const latestRecord = resolveStoredIdRecord(contentId);
+          if (!latestRecord || latestRecord.x.content_id !== contentId) {
+            throw new Error("article changed");
+          }
           const currentOrder = getArticleImages(
-            article,
-            activeG,
-            activeI,
+            latestRecord.x,
+            latestRecord.gi,
+            latestRecord.ii,
           ).map((image) => image.image_id);
           const saved = updateArticleImageState(contentId, (state) => {
             state.uploads.push(...uploads);
@@ -514,19 +555,59 @@ const KEY = "zy_kb_system_v2",
             ];
           });
           if (!saved) return;
-          renderDoc();
-          toast(`已添加 ${uploads.length} 张图片`);
+          refreshImageManager(contentId, true);
+          toast(`已添加并压缩 ${uploads.length} 张图片`);
         } catch (error) {
           alert("图片处理失败或压缩后仍过大，请换用尺寸更小的图片。");
         }
       }
-      function updateImageCaption(g, i, imageIndex, caption) {
-        const article = groups[g]?.items?.[i];
-        const image = getArticleImages(article, g, i)[imageIndex];
+      async function addArticleImages(event) {
+        const input = event.currentTarget;
+        const files = [...(input.files || [])];
+        const contentId = input.closest(".image-manager")?.dataset.contentId;
+        input.value = "";
+        await processArticleImageFiles(files, contentId);
+      }
+      async function pasteArticleImages(event) {
+        const contentId = event.currentTarget.dataset.contentId;
+        const files = [...(event.clipboardData?.items || [])]
+          .filter(
+            (item) =>
+              item.kind === "file" && /^image\//i.test(item.type || ""),
+          )
+          .map((item) => item.getAsFile())
+          .filter(Boolean);
+        if (!files.length) return;
+        event.preventDefault();
+        await processArticleImageFiles(files, contentId);
+      }
+      const imageCaptionTimers = new Map();
+      function persistImageCaption(image, caption) {
         if (!image) return;
         updateArticleImageState(image.content_id, (state) => {
           state.captions[image.image_id] = String(caption || "");
         });
+      }
+      function scheduleImageCaption(g, i, imageIndex, caption) {
+        const article = groups[g]?.items?.[i];
+        const image = getArticleImages(article, g, i)[imageIndex];
+        if (!image) return;
+        clearTimeout(imageCaptionTimers.get(image.image_id));
+        imageCaptionTimers.set(
+          image.image_id,
+          setTimeout(() => {
+            imageCaptionTimers.delete(image.image_id);
+            persistImageCaption(image, caption);
+          }, 250),
+        );
+      }
+      function flushImageCaption(g, i, imageIndex, caption) {
+        const article = groups[g]?.items?.[i];
+        const image = getArticleImages(article, g, i)[imageIndex];
+        if (!image) return;
+        clearTimeout(imageCaptionTimers.get(image.image_id));
+        imageCaptionTimers.delete(image.image_id);
+        persistImageCaption(image, caption);
       }
       function moveArticleImage(g, i, imageIndex, direction) {
         const article = groups[g]?.items?.[i];
@@ -538,7 +619,7 @@ const KEY = "zy_kb_system_v2",
         const saved = updateArticleImageState(contentId, (state) => {
           state.order = images.map((image) => image.image_id);
         });
-        if (saved) renderDoc();
+        if (saved) refreshImageManager(contentId);
       }
       function deleteArticleImage(g, i, imageIndex) {
         const article = groups[g]?.items?.[i];
@@ -561,7 +642,7 @@ const KEY = "zy_kb_system_v2",
           delete state.captions[image.image_id];
         });
         if (saved) {
-          renderDoc();
+          refreshImageManager(image.content_id);
           toast("图片已删除");
         }
       }
@@ -879,7 +960,7 @@ const KEY = "zy_kb_system_v2",
             ? `<div class="markdown-body">${renderMarkdown(text, x.title)}</div>`
             : `<div class="readview">${esc(text)}</div>`;
         $("#main").innerHTML =
-          `<div class="topbar"><div class="crumb">${esc(groups[activeG].title)} / ${editing ? "编辑内容" : "查看内容"}</div><div class="tools"><button class="btn" onclick="toggleFav(${activeG},${activeI})">${favs.includes(getContentId(activeG, activeI)) ? "★ 已收藏" : "☆ 收藏"}</button><button class="btn" onclick="copyCurrent()">复制</button><button class="btn primary" onclick="toggleEdit()">${editing ? "完成编辑" : "编辑"}</button><button class="btn danger" onclick="deleteCurrent()">删除</button></div></div><div class="paper">${editing ? `<input class="titleinput" id="titleEdit" value="${esc(x.title)}"><textarea class="contentarea" id="bodyEdit">${esc(text)}</textarea>${renderImageManager(activeG, activeI)}` : `<h1 style="margin:0;border-bottom:1px solid var(--line);padding-bottom:12px">${esc(x.title)}</h1>${images}${body}`}</div>`;
+          `<div class="topbar"><div class="crumb">${esc(groups[activeG].title)} / ${editing ? "编辑内容" : "查看内容"}</div><div class="tools"><button class="btn" onclick="toggleFav(${activeG},${activeI})">${favs.includes(getContentId(activeG, activeI)) ? "★ 已收藏" : "☆ 收藏"}</button><button class="btn" onclick="copyCurrent()">复制</button><button class="btn primary" onclick="toggleEdit()">${editing ? "完成编辑" : "编辑"}</button><button class="btn danger" onclick="deleteCurrent()">删除</button></div></div><div class="paper">${editing ? `<div class="article-editor"><input class="titleinput" id="titleEdit" value="${esc(x.title)}"><textarea class="contentarea" id="bodyEdit">${esc(text)}</textarea>${renderImageManager(activeG, activeI)}</div>` : `<h1 style="margin:0;border-bottom:1px solid var(--line);padding-bottom:12px">${esc(x.title)}</h1>${images}${body}`}</div>`;
       }
       function toggleEdit() {
         if (editing) {
