@@ -3,6 +3,7 @@ const KEY = "zy_kb_system_v2",
         RKEY = "zy_kb_recent_v2",
         IKEY = "zy_kb_article_images_v2",
         CATEGORY_ORDER_KEY = "zy_kb_category_order_v1",
+        ARTICLE_CATEGORY_OVERRIDE_KEY = "zy_kb_article_category_overrides_v1",
         DATA_VERSION_KEY = "zy_kb_default_data_version_v2",
         DATA_BACKUP_KEY = "zy_kb_system_v2_pre_document_pack_backup",
         DATA_VERSION = "document-pack-2026-07-22";
@@ -19,6 +20,8 @@ const KEY = "zy_kb_system_v2",
       }
       hydrateGroups();
       let categoryOrder = loadCategoryOrder();
+      let articleCategoryOverrides = loadArticleCategoryOverrides();
+      applyArticleCategoryOverrides();
       let favs = normalizeStoredIds(JSON.parse(localStorage.getItem(FKEY) || "[]"));
       let recent = normalizeStoredIds(JSON.parse(localStorage.getItem(RKEY) || "[]"));
       const storedArticleImages = JSON.parse(localStorage.getItem(IKEY) || "{}");
@@ -50,6 +53,8 @@ const KEY = "zy_kb_system_v2",
       };
       let categoryDragState = null;
       let categoryScrollObserver = null;
+      let moveDialogReturnFocus = null;
+      let latestMoveUndo = null;
       const $ = (s) => document.querySelector(s);
       save();
       function esc(s) {
@@ -1109,6 +1114,108 @@ const KEY = "zy_kb_system_v2",
         save();
         return contentId;
       }
+      function loadArticleCategoryOverrides() {
+        try {
+          const parsed = JSON.parse(
+            localStorage.getItem(ARTICLE_CATEGORY_OVERRIDE_KEY) || "{}",
+          );
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return {};
+          }
+          const normalized = {};
+          Object.entries(parsed).forEach(([key, raw]) => {
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+            const contentId = String(raw.content_id || key || "").trim();
+            const sourceCategoryId = String(
+              raw.source_category_id || "",
+            ).trim();
+            const targetCategoryId = String(
+              raw.target_category_id || "",
+            ).trim();
+            if (
+              !isStableContentId(contentId) ||
+              !sourceCategoryId ||
+              !targetCategoryId ||
+              sourceCategoryId === targetCategoryId
+            ) {
+              return;
+            }
+            normalized[contentId] = {
+              content_id: contentId,
+              source_category_id: sourceCategoryId,
+              target_category_id: targetCategoryId,
+              moved_at: String(raw.moved_at || ""),
+            };
+          });
+          return normalized;
+        } catch (error) {
+          return {};
+        }
+      }
+      function persistArticleCategoryOverrides() {
+        try {
+          localStorage.setItem(
+            ARTICLE_CATEGORY_OVERRIDE_KEY,
+            JSON.stringify(articleCategoryOverrides),
+          );
+          return true;
+        } catch (error) {
+          toast("移动结果保存失败");
+          return false;
+        }
+      }
+      function findGroupIndexByCategoryId(categoryId) {
+        return groups.findIndex(
+          (group, gi) =>
+            getCategoryOrderId(group, gi) === String(categoryId || ""),
+        );
+      }
+      function findArticleByContentId(contentId) {
+        for (let gi = 0; gi < groups.length; gi += 1) {
+          const ii = groups[gi].items.findIndex(
+            (article) => article?.content_id === contentId,
+          );
+          if (ii >= 0) {
+            return { gi, ii, group: groups[gi], article: groups[gi].items[ii] };
+          }
+        }
+        return null;
+      }
+      function relocateArticleByContentId(contentId, targetCategoryId) {
+        const targetIndex = findGroupIndexByCategoryId(targetCategoryId);
+        if (targetIndex < 0) return null;
+        const current = findArticleByContentId(contentId);
+        if (!current) return null;
+        const article = current.article;
+        groups.forEach((group) => {
+          group.items = group.items.filter(
+            (candidate) => candidate?.content_id !== contentId,
+          );
+        });
+        groups[targetIndex].items.unshift(article);
+        return {
+          article,
+          sourceIndex: current.gi,
+          targetIndex,
+        };
+      }
+      function applyArticleCategoryOverrides() {
+        Object.values(articleCategoryOverrides)
+          .sort(
+            (a, b) =>
+              new Date(a.moved_at || 0).getTime() -
+              new Date(b.moved_at || 0).getTime(),
+          )
+          .forEach((record) => {
+            if (findGroupIndexByCategoryId(record.target_category_id) < 0) {
+              return;
+            }
+            relocateArticleByContentId(
+              record.content_id,
+              record.target_category_id,
+            );
+          });
+      }
       function findMatchIndex(list, candidate, fallbackIndex, used) {
         let index = -1;
         if (candidate?.category_id) {
@@ -1184,6 +1291,42 @@ const KEY = "zy_kb_system_v2",
         });
         ORIGINAL_DATA.forEach((baseGroup, gi) => {
           if (!usedBaseGroups.has(gi)) merged.push(structuredClone(baseGroup));
+        });
+        const preferredCategoryByContentId = new Map();
+        stored.forEach((group, gi) => {
+          const categoryId = String(group?.category_id || `group_${gi}`);
+          (group?.items || []).forEach((article) => {
+            if (
+              article?.content_id &&
+              !preferredCategoryByContentId.has(article.content_id)
+            ) {
+              preferredCategoryByContentId.set(article.content_id, categoryId);
+            }
+          });
+        });
+        const validCategoryIds = new Set(
+          merged.map((group, gi) =>
+            String(group?.category_id || `group_${gi}`),
+          ),
+        );
+        const seenContentIds = new Set();
+        merged.forEach((group, gi) => {
+          const categoryId = String(group?.category_id || `group_${gi}`);
+          group.items = (group.items || []).filter((article) => {
+            const contentId = article?.content_id;
+            if (!contentId) return true;
+            const preferredCategory = preferredCategoryByContentId.get(contentId);
+            if (
+              preferredCategory &&
+              validCategoryIds.has(preferredCategory) &&
+              preferredCategory !== categoryId
+            ) {
+              return false;
+            }
+            if (seenContentIds.has(contentId)) return false;
+            seenContentIds.add(contentId);
+            return true;
+          });
         });
         return merged;
       }
@@ -1270,11 +1413,209 @@ const KEY = "zy_kb_system_v2",
         return null;
       }
       function toast(s) {
+        clearMoveUndoState();
         let t = $("#toast");
+        t.classList.remove("move-toast");
         t.textContent = s;
         t.classList.add("show");
         clearTimeout(window.tt);
         window.tt = setTimeout(() => t.classList.remove("show"), 1200);
+      }
+      function clearMoveUndoState() {
+        clearTimeout(window.moveUndoTimer);
+        latestMoveUndo = null;
+      }
+      function showMoveSuccessToast(targetTitle, undoState) {
+        clearTimeout(window.tt);
+        clearTimeout(window.moveUndoTimer);
+        latestMoveUndo = undoState;
+        const t = $("#toast");
+        t.classList.add("show", "move-toast");
+        t.innerHTML = `<span>已移动到“${esc(targetTitle)}”</span><button type="button" onclick="undoLastArticleMove()">撤销</button>`;
+        window.moveUndoTimer = setTimeout(() => {
+          latestMoveUndo = null;
+          t.classList.remove("show", "move-toast");
+        }, 8000);
+      }
+      function ensureMoveDialog() {
+        let backdrop = $("#moveArticleDialog");
+        if (backdrop) return backdrop;
+        backdrop = document.createElement("div");
+        backdrop.id = "moveArticleDialog";
+        backdrop.className = "move-dialog-backdrop";
+        backdrop.hidden = true;
+        backdrop.setAttribute("aria-hidden", "true");
+        backdrop.innerHTML = `<section class="move-dialog" role="dialog" aria-modal="true" aria-labelledby="moveDialogTitle"><header><h2 id="moveDialogTitle">移动内容</h2><button type="button" class="move-dialog-close" aria-label="关闭移动内容窗口" title="关闭" onclick="closeMoveDialog()">×</button></header><div class="move-dialog-summary"><span>当前文章</span><strong id="moveArticleTitle"></strong><span>当前分类</span><strong id="moveCurrentCategory"></strong></div><label class="move-dialog-field"><span>目标分类</span><select id="moveTargetCategory" onchange="updateMoveConfirmButton()"><option value="">请选择目标分类</option></select></label><footer><button type="button" class="btn" onclick="closeMoveDialog()">取消</button><button type="button" class="btn primary" id="confirmArticleMove" onclick="confirmArticleMove()" disabled>确认移动</button></footer></section>`;
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) closeMoveDialog();
+        });
+        document.body.appendChild(backdrop);
+        return backdrop;
+      }
+      function openMoveDialog() {
+        if (mode !== "group") return;
+        if (editing) {
+          toast("请先完成编辑再移动");
+          return;
+        }
+        const article = groups[activeG]?.items?.[activeI];
+        const sourceGroup = groups[activeG];
+        if (!article || !sourceGroup) return;
+        const contentId = ensureStableContentId(activeG, activeI);
+        if (!contentId) return;
+        const sourceCategoryId = getCategoryOrderId(sourceGroup, activeG);
+        const targetGroups = getOrderedGroupIndexes().filter(
+          (gi) => gi !== activeG && groups[gi],
+        );
+        if (!targetGroups.length) {
+          toast("暂无可移动的目标分类");
+          return;
+        }
+        const backdrop = ensureMoveDialog();
+        moveDialogReturnFocus = document.activeElement;
+        $("#moveArticleTitle").textContent = article.title;
+        $("#moveCurrentCategory").textContent = sourceGroup.title;
+        const select = $("#moveTargetCategory");
+        select.innerHTML = `<option value="">请选择目标分类</option>${targetGroups
+          .map(
+            (gi) =>
+              `<option value="${esc(getCategoryOrderId(groups[gi], gi))}">${esc(groups[gi].title)}</option>`,
+          )
+          .join("")}`;
+        backdrop.dataset.contentId = contentId;
+        backdrop.dataset.sourceCategoryId = sourceCategoryId;
+        $("#confirmArticleMove").disabled = true;
+        backdrop.hidden = false;
+        backdrop.setAttribute("aria-hidden", "false");
+        document.body.classList.add("moving-content");
+        requestAnimationFrame(() => select.focus());
+      }
+      function updateMoveConfirmButton() {
+        const backdrop = $("#moveArticleDialog");
+        const select = $("#moveTargetCategory");
+        const confirmButton = $("#confirmArticleMove");
+        if (!backdrop || !select || !confirmButton) return;
+        confirmButton.disabled =
+          !select.value ||
+          select.value === backdrop.dataset.sourceCategoryId ||
+          findGroupIndexByCategoryId(select.value) < 0;
+      }
+      function closeMoveDialog() {
+        const backdrop = $("#moveArticleDialog");
+        if (!backdrop || backdrop.hidden) return;
+        backdrop.hidden = true;
+        backdrop.setAttribute("aria-hidden", "true");
+        delete backdrop.dataset.contentId;
+        delete backdrop.dataset.sourceCategoryId;
+        document.body.classList.remove("moving-content");
+        const returnFocus = moveDialogReturnFocus;
+        moveDialogReturnFocus = null;
+        returnFocus?.focus?.();
+      }
+      function renderMovedArticle(groupIndex) {
+        activeG = groupIndex;
+        activeI = 0;
+        editing = false;
+        setMode("group");
+        renderNav(groupIndex);
+        renderGroupList(groupIndex);
+        renderDoc();
+      }
+      function confirmArticleMove() {
+        const backdrop = $("#moveArticleDialog");
+        const select = $("#moveTargetCategory");
+        if (!backdrop || backdrop.hidden || !select?.value) return;
+        const contentId = String(backdrop.dataset.contentId || "");
+        const current = findArticleByContentId(contentId);
+        const targetIndex = findGroupIndexByCategoryId(select.value);
+        if (!current || targetIndex < 0 || current.gi === targetIndex) {
+          updateMoveConfirmButton();
+          return;
+        }
+        const sourceCategoryId = getCategoryOrderId(groups[current.gi], current.gi);
+        const targetCategoryId = getCategoryOrderId(
+          groups[targetIndex],
+          targetIndex,
+        );
+        const previousOverride = articleCategoryOverrides[contentId]
+          ? structuredClone(articleCategoryOverrides[contentId])
+          : null;
+        articleCategoryOverrides[contentId] = {
+          content_id: contentId,
+          source_category_id:
+            previousOverride?.source_category_id || sourceCategoryId,
+          target_category_id: targetCategoryId,
+          moved_at: new Date().toISOString(),
+        };
+        if (!persistArticleCategoryOverrides()) {
+          if (previousOverride) {
+            articleCategoryOverrides[contentId] = previousOverride;
+          } else {
+            delete articleCategoryOverrides[contentId];
+          }
+          return;
+        }
+        const result = relocateArticleByContentId(contentId, targetCategoryId);
+        if (!result) {
+          if (previousOverride) {
+            articleCategoryOverrides[contentId] = previousOverride;
+          } else {
+            delete articleCategoryOverrides[contentId];
+          }
+          persistArticleCategoryOverrides();
+          toast("移动失败，文章或目标分类不存在");
+          return;
+        }
+        const sourceTitle = groups[current.gi]?.title || "原分类";
+        const targetTitle = groups[targetIndex].title;
+        closeMoveDialog();
+        renderMovedArticle(targetIndex);
+        showMoveSuccessToast(targetTitle, {
+          contentId,
+          sourceCategoryId,
+          sourceTitle,
+          targetCategoryId,
+          previousOverride,
+        });
+      }
+      function undoLastArticleMove() {
+        const state = latestMoveUndo;
+        if (!state) return;
+        const currentOverride = articleCategoryOverrides[state.contentId];
+        if (
+          !currentOverride ||
+          currentOverride.target_category_id !== state.targetCategoryId ||
+          findGroupIndexByCategoryId(state.sourceCategoryId) < 0 ||
+          !findArticleByContentId(state.contentId)
+        ) {
+          toast("当前移动无法撤销");
+          return;
+        }
+        clearTimeout(window.moveUndoTimer);
+        latestMoveUndo = null;
+        if (state.previousOverride) {
+          articleCategoryOverrides[state.contentId] = structuredClone(
+            state.previousOverride,
+          );
+        } else {
+          delete articleCategoryOverrides[state.contentId];
+        }
+        if (!persistArticleCategoryOverrides()) {
+          articleCategoryOverrides[state.contentId] = currentOverride;
+          return;
+        }
+        const result = relocateArticleByContentId(
+          state.contentId,
+          state.sourceCategoryId,
+        );
+        if (!result) {
+          articleCategoryOverrides[state.contentId] = currentOverride;
+          persistArticleCategoryOverrides();
+          toast("当前移动无法撤销");
+          return;
+        }
+        renderMovedArticle(result.targetIndex);
+        toast("已撤销移动");
       }
       function loadCategoryOrder() {
         try {
@@ -1728,7 +2069,7 @@ const KEY = "zy_kb_system_v2",
             ? `<div class="markdown-body">${renderMarkdown(text, x.title)}</div>`
             : `<div class="readview">${esc(text)}</div>`;
         $("#main").innerHTML =
-          `<div class="topbar"><div class="crumb">${esc(groups[activeG].title)} / ${editing ? "编辑内容" : "查看内容"}</div><div class="tools"><button class="btn" onclick="toggleFav(${activeG},${activeI})">${favs.includes(getContentId(activeG, activeI)) ? "★ 已收藏" : "☆ 收藏"}</button><button class="btn" onclick="copyCurrent()">复制</button><button class="btn primary" onclick="toggleEdit()">${editing ? "完成编辑" : "编辑"}</button><button class="btn danger" onclick="deleteCurrent()">删除</button></div></div><div class="paper">${editing ? `<div class="article-editor"><input class="titleinput" id="titleEdit" value="${esc(x.title)}"><textarea class="contentarea" id="bodyEdit">${esc(text)}</textarea>${renderImageManager(activeG, activeI)}</div>` : `<h1 style="margin:0;border-bottom:1px solid var(--line);padding-bottom:12px">${esc(x.title)}</h1>${images}${body}`}</div>`;
+          `<div class="topbar"><div class="crumb">${esc(groups[activeG].title)} / ${editing ? "编辑内容" : "查看内容"}</div><div class="tools"><button class="btn" onclick="toggleFav(${activeG},${activeI})">${favs.includes(getContentId(activeG, activeI)) ? "★ 已收藏" : "☆ 收藏"}</button><button class="btn" onclick="copyCurrent()">复制</button><button class="btn" onclick="openMoveDialog()" ${editing ? 'disabled title="请先完成编辑再移动"' : ""}>移动</button><button class="btn primary" onclick="toggleEdit()">${editing ? "完成编辑" : "编辑"}</button><button class="btn danger" onclick="deleteCurrent()">删除</button></div></div><div class="paper">${editing ? `<div class="article-editor"><input class="titleinput" id="titleEdit" value="${esc(x.title)}"><textarea class="contentarea" id="bodyEdit">${esc(text)}</textarea>${renderImageManager(activeG, activeI)}</div>` : `<h1 style="margin:0;border-bottom:1px solid var(--line);padding-bottom:12px">${esc(x.title)}</h1>${images}${body}`}</div>`;
       }
       function toggleEdit() {
         if (editing) {
@@ -1847,6 +2188,8 @@ const KEY = "zy_kb_system_v2",
               const importedGroups = JSON.parse(r.result);
               if (!Array.isArray(importedGroups)) throw new Error("invalid data");
               groups = mergeOriginalData(importedGroups);
+              hydrateGroups();
+              applyArticleCategoryOverrides();
               save();
               showHome();
               toast("导入成功");
@@ -1861,6 +2204,8 @@ const KEY = "zy_kb_system_v2",
       function resetData() {
         if (confirm("确定恢复首版内容吗？当前修改将被覆盖。")) {
           groups = structuredClone(ORIGINAL_DATA);
+          hydrateGroups();
+          applyArticleCategoryOverrides();
           favs = [];
           recent = [];
           save();
@@ -1882,6 +2227,7 @@ const KEY = "zy_kb_system_v2",
         if (event.key === "Escape") {
           closeImageViewer();
           closeGalleryMenus();
+          closeMoveDialog();
         }
       });
       document.addEventListener("click", (event) => {
