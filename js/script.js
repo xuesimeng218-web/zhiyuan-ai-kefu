@@ -417,26 +417,25 @@ const KEY = "zy_kb_system_v2",
         if (!article) return "";
         const contentId = getContentId(g, i);
         const images = getArticleImages(article, g, i);
-        return `<section class="image-manager" data-content-id="${esc(contentId)}" tabindex="0" onpaste="pasteArticleImages(event)" aria-label="文章图片管理区，可粘贴图片"><div class="image-manager-head"><div><h2>文章图片</h2><p>图片独立保存，并与当前文章 ID <code>${esc(contentId)}</code> 关联。</p><p class="image-paste-hint">点击此区域后按 Command+V / Ctrl+V，可直接粘贴从微信复制的图片。</p></div><label class="btn image-upload-button">选择图片<input class="image-upload-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple onchange="addArticleImages(event)"></label></div>${images.length ? `<div class="image-manager-grid">${images
+        return `<section class="image-manager" data-content-id="${esc(contentId)}" tabindex="0" onpaste="pasteArticleImages(event)" aria-label="文章图片管理区，可粘贴图片"><div class="image-manager-head"><div><h2>文章图片 / 添加图片</h2><p>图片独立保存，并与当前文章 ID <code>${esc(contentId)}</code> 关联。</p><p class="image-paste-hint">点击此区域后按 Command+V / Ctrl+V，可直接粘贴从微信复制的图片。</p></div><label class="btn image-upload-button">添加图片<input class="image-upload-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple onchange="addArticleImages(event)"></label></div>${images.length ? `<div class="image-manager-grid">${images
           .map(
             (image, index) =>
               `<article class="image-manager-card"><button type="button" class="image-manager-preview" onclick="openImage(${g},${i},${index})" aria-label="放大图片：${esc(image.alt)}"><img src="${esc(image.src)}" alt="${esc(image.alt)}" loading="lazy"></button><div class="image-manager-meta"><span>${image.source === "official" ? "正式资料图片" : "浏览器上传"}</span><small>${index + 1} / ${images.length}</small></div><label>图片说明<input type="text" value="${esc(image.caption)}" placeholder="可填写图片说明" oninput="scheduleImageCaption(${g},${i},${index},this.value)" onblur="flushImageCaption(${g},${i},${index},this.value)"></label><div class="image-manager-actions"><button type="button" class="btn" onclick="moveArticleImage(${g},${i},${index},-1)" ${index === 0 ? "disabled" : ""}>上移</button><button type="button" class="btn" onclick="moveArticleImage(${g},${i},${index},1)" ${index === images.length - 1 ? "disabled" : ""}>下移</button><button type="button" class="btn danger" onclick="deleteArticleImage(${g},${i},${index})">删除</button></div></article>`,
           )
           .join("")}</div>` : '<div class="image-manager-empty">暂无图片。可选择图片，或点击此区域后直接粘贴图片。</div>'}</section>`;
       }
+      function findImageManager(contentId) {
+        return [...document.querySelectorAll(".image-manager")].find(
+          (manager) => manager.dataset.contentId === contentId,
+        );
+      }
       function refreshImageManager(contentId, focusManager = false) {
         const record = resolveStoredIdRecord(contentId);
-        const manager = document.querySelector(
-          `.image-manager[data-content-id="${CSS.escape(contentId)}"]`,
-        );
+        const manager = findImageManager(contentId);
         if (!record || !manager) return;
         manager.outerHTML = renderImageManager(record.gi, record.ii);
         if (focusManager) {
-          document
-            .querySelector(
-              `.image-manager[data-content-id="${CSS.escape(contentId)}"]`,
-            )
-            ?.focus();
+          findImageManager(contentId)?.focus();
         }
       }
       function createImageId(contentId) {
@@ -454,7 +453,10 @@ const KEY = "zy_kb_system_v2",
         });
       }
       function optimizeImageDataUrl(dataUrl, file) {
-        if (file.type === "image/gif") return Promise.resolve(dataUrl);
+        const targetLength = 650 * 1024;
+        if (file.type === "image/gif" && dataUrl.length <= targetLength) {
+          return Promise.resolve(dataUrl);
+        }
         return new Promise((resolve) => {
           const image = new Image();
           image.onload = () => {
@@ -469,7 +471,6 @@ const KEY = "zy_kb_system_v2",
               resolve(dataUrl);
               return;
             }
-            const targetLength = 650 * 1024;
             const qualities = [0.84, 0.72, 0.6];
             let best = dataUrl;
             for (let attempt = 0; attempt < 12; attempt += 1) {
@@ -570,13 +571,17 @@ const KEY = "zy_kb_system_v2",
       }
       async function pasteArticleImages(event) {
         const contentId = event.currentTarget.dataset.contentId;
-        const files = [...(event.clipboardData?.items || [])]
+        const itemFiles = [...(event.clipboardData?.items || [])]
           .filter(
             (item) =>
               item.kind === "file" && /^image\//i.test(item.type || ""),
           )
           .map((item) => item.getAsFile())
           .filter(Boolean);
+        const clipboardFiles = [...(event.clipboardData?.files || [])].filter(
+          (file) => /^image\//i.test(file.type || ""),
+        );
+        const files = itemFiles.length ? itemFiles : clipboardFiles;
         if (!files.length) return;
         event.preventDefault();
         await processArticleImageFiles(files, contentId);
@@ -626,6 +631,8 @@ const KEY = "zy_kb_system_v2",
         const images = getArticleImages(article, g, i);
         const image = images[imageIndex];
         if (!image || !confirm("确定删除这张图片吗？正文不会受到影响。")) return;
+        clearTimeout(imageCaptionTimers.get(image.image_id));
+        imageCaptionTimers.delete(image.image_id);
         const saved = updateArticleImageState(image.content_id, (state) => {
           if (image.source === "official") {
             if (!state.hidden.includes(image.image_id)) {
@@ -669,13 +676,26 @@ const KEY = "zy_kb_system_v2",
       function ensureStableContentId(g, i) {
         const article = groups[g]?.items?.[i];
         if (!article) return "";
-        if (isStableContentId(article.content_id)) return article.content_id;
+        const duplicateContentId = allDocs().some(
+          ({ x }) =>
+            x !== article &&
+            x.content_id &&
+            x.content_id === article.content_id,
+        );
+        if (isStableContentId(article.content_id) && !duplicateContentId) {
+          return article.content_id;
+        }
         const oldId = article.content_id || id(g, i);
         const contentId = createContentId();
         article.content_id = contentId;
-        favs = favs.map((value) => (value === oldId ? contentId : value));
-        recent = recent.map((value) => (value === oldId ? contentId : value));
-        if (Object.prototype.hasOwnProperty.call(articleImageState, oldId)) {
+        if (!duplicateContentId) {
+          favs = favs.map((value) => (value === oldId ? contentId : value));
+          recent = recent.map((value) => (value === oldId ? contentId : value));
+        }
+        if (
+          !duplicateContentId &&
+          Object.prototype.hasOwnProperty.call(articleImageState, oldId)
+        ) {
           articleImageState[contentId] = articleImageState[oldId];
           if (Array.isArray(articleImageState[contentId]?.uploads)) {
             articleImageState[contentId].uploads.forEach((image) => {

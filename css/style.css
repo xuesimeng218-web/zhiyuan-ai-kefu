@@ -234,16 +234,19 @@
         outline: none;
       }
       .article-editor {
-        display: grid;
-        grid-template-rows: auto auto auto;
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
       }
       .contentarea {
+        display: block;
+        flex: 0 0 auto;
         width: 100%;
-        height: clamp(360px, 52vh, 580px);
+        height: clamp(300px, 42vh, 480px);
         margin-top: 16px;
         border: 0;
         outline: none;
-        overflow: auto;
+        overflow-y: auto;
         resize: none;
         font-size: 15px;
         line-height: 1.9;
@@ -462,6 +465,9 @@
         line-height: 1.55;
       }
       .image-manager {
+        display: block;
+        flex: 0 0 auto;
+        min-width: 0;
         margin-top: 22px;
         padding-top: 20px;
         border-top: 1px solid var(--line);
@@ -812,7 +818,7 @@
           justify-content: flex-start;
         }
         .contentarea {
-          height: clamp(300px, 42vh, 480px);
+          height: clamp(260px, 36vh, 400px);
         }
         .article-images {
           grid-template-columns: 1fr;
