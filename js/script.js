@@ -30,6 +30,22 @@ const KEY = "zy_kb_system_v2",
         activeG = 0,
         activeI = 0,
         editing = false;
+      const GALLERY_PRODUCTS = [
+        "ChatGPT",
+        "Claude",
+        "Gemini",
+        "Grok",
+        "Cursor",
+        "Perplexity",
+        "其他产品",
+      ];
+      const PRICE_GALLERY_ENTRY_ID = "price-gallery";
+      const galleryViewState = {
+        query: "",
+        product: "all",
+        status: "all",
+        sort: "custom",
+      };
       const $ = (s) => document.querySelector(s);
       save();
       function esc(s) {
@@ -657,6 +673,387 @@ const KEY = "zy_kb_system_v2",
         document.querySelector(".image-viewer")?.remove();
         document.body.classList.remove("viewing-image");
       }
+      function isProductCenterGroup(group) {
+        return String(group?.category_id || "").trim() === "products";
+      }
+      function renderGallerySystemEntry(gi) {
+        const activeClass = mode === "gallery" ? "on" : "";
+        return `<button type="button" class="docitem gallery-system-entry ${activeClass}" data-system-entry="${PRICE_GALLERY_ENTRY_ID}" onclick="openPriceGallery(${gi})"><b>价格图素材库 <span>图库</span></b><small>集中管理 ChatGPT、Claude、Gemini、Grok、Cursor、Perplexity 等产品价格图</small></button>`;
+      }
+      function renderGroupList(gi) {
+        const group = groups[gi];
+        if (!group) return;
+        renderList(
+          group.items.map((x, ii) => ({ g: group, gi, x, ii })),
+          group.title,
+        );
+        if (!isProductCenterGroup(group) || $("#q").value.trim()) return;
+        $("#items").innerHTML =
+          renderGallerySystemEntry(gi) + $("#items").innerHTML;
+      }
+      function firstGalleryValue(...values) {
+        const value = values.find(
+          (candidate) =>
+            candidate !== undefined &&
+            candidate !== null &&
+            String(candidate).trim(),
+        );
+        return value === undefined ? "" : String(value).trim();
+      }
+      function getGalleryRawImage(article, contentId, image) {
+        const official = Array.isArray(article?.images)
+          ? article.images
+          : article?.images
+            ? [article.images]
+            : [];
+        const uploads = Array.isArray(articleImageState[contentId]?.uploads)
+          ? articleImageState[contentId].uploads
+          : [];
+        return [...official, ...uploads].find((candidate) => {
+          const record =
+            typeof candidate === "string" ? { src: candidate } : candidate;
+          if (!record || typeof record !== "object") return false;
+          const candidateId = String(record.image_id || record.id || "");
+          return (
+            (candidateId && candidateId === image.image_id) ||
+            safeImageSrc(record.src) === image.src
+          );
+        }) || {};
+      }
+      function normalizeGalleryProduct(raw, fallbackText = "") {
+        const detectProducts = (value) => {
+          const text = String(value || "").toLowerCase();
+          return [
+            ["ChatGPT", /chatgpt|openai|\bgpt\b/],
+            ["Claude", /claude|anthropic/],
+            ["Gemini", /gemini|google ai/],
+            ["Grok", /grok|xai|x\.ai/],
+            ["Cursor", /cursor/],
+            ["Perplexity", /perplexity/],
+          ]
+            .filter(([, pattern]) => pattern.test(text))
+            .map(([product]) => product);
+        };
+        const explicitProducts = detectProducts(raw);
+        if (explicitProducts.length === 1) return explicitProducts[0];
+        if (explicitProducts.length > 1) return "其他产品";
+        const inferredProducts = detectProducts(fallbackText);
+        if (inferredProducts.length === 1) return inferredProducts[0];
+        return "其他产品";
+      }
+      function normalizeGalleryStatus(raw, metadata, article) {
+        if (
+          metadata?.is_current === false ||
+          metadata?.is_active === false ||
+          metadata?.archived === true ||
+          article?.is_current === false ||
+          article?.is_active === false ||
+          article?.archived === true
+        ) {
+          return "history";
+        }
+        const value = String(raw || "").trim().toLowerCase();
+        if (/history|historical|archive|archived|旧版|历史/.test(value)) {
+          return "history";
+        }
+        return "current";
+      }
+      function galleryTimestamp(raw) {
+        if (raw === undefined || raw === null || raw === "") return 0;
+        let value = raw;
+        if (typeof value === "number" && value > 0 && value < 1e12) {
+          value *= 1000;
+        }
+        const timestamp = new Date(value).getTime();
+        return Number.isFinite(timestamp) ? timestamp : 0;
+      }
+      function formatGalleryDate(raw) {
+        const timestamp = galleryTimestamp(raw);
+        if (!timestamp) return "暂无记录";
+        return new Intl.DateTimeFormat("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).format(timestamp);
+      }
+      function getPriceGalleryAssets(gi) {
+        const group = groups[gi];
+        if (!group) return [];
+        const assets = [];
+        (group.items || []).forEach((article, ii) => {
+          const contentId = article.content_id || id(gi, ii);
+          const images = getArticleImages(article, gi, ii);
+          const records = images.length ? images : [null];
+          records.forEach((image, imageIndex) => {
+            const metadata = image
+              ? getGalleryRawImage(article, contentId, image)
+              : {};
+            const fallbackText = [
+              article.title,
+              image?.file_name,
+              image?.alt,
+              image?.caption,
+              ...(Array.isArray(article.paragraphs)
+                ? article.paragraphs.slice(0, 1)
+                : []),
+            ].join(" ");
+            const productRaw = firstGalleryValue(
+              metadata.product,
+              metadata.product_name,
+              metadata.product_category,
+              metadata.productCategory,
+              metadata.product_type,
+              metadata.productType,
+              metadata.category,
+              metadata.category_name,
+              article.product,
+              article.product_name,
+              article.product_category,
+              article.productCategory,
+              article.product_type,
+              article.productType,
+              article.category,
+              article.category_name,
+            );
+            const statusRaw = firstGalleryValue(
+              metadata.status,
+              metadata.version_status,
+              metadata.versionStatus,
+              metadata.state,
+              article.status,
+              article.version_status,
+              article.versionStatus,
+              article.state,
+            );
+            const uploadedAt = firstGalleryValue(
+              metadata.uploaded_at,
+              metadata.uploadedAt,
+              metadata.upload_time,
+              metadata.created_at,
+              metadata.createdAt,
+              article.uploaded_at,
+              article.uploadedAt,
+              article.upload_time,
+              article.created_at,
+              article.createdAt,
+            );
+            const updatedAt = firstGalleryValue(
+              metadata.updated_at,
+              metadata.updatedAt,
+              metadata.update_time,
+              metadata.last_updated,
+              article.updated_at,
+              article.updatedAt,
+              article.update_time,
+              article.last_updated,
+            );
+            const name = firstGalleryValue(
+              metadata.name,
+              metadata.image_name,
+              metadata.title,
+              metadata.file_name,
+              article.title,
+              image?.file_name,
+              image?.alt,
+              `价格图 ${assets.length + 1}`,
+            );
+            const note = firstGalleryValue(
+              metadata.note,
+              metadata.remark,
+              metadata.memo,
+              metadata.description,
+              image?.caption,
+              article.note,
+              article.remark,
+              article.memo,
+              article.description,
+              Array.isArray(article.paragraphs)
+                ? article.paragraphs[0]
+                : "",
+            );
+            const sortOrderRaw =
+              metadata.sort_order ??
+              metadata.sortOrder ??
+              article.sort_order ??
+              article.sortOrder;
+            const sortOrder = Number(sortOrderRaw);
+            const hasSortOrder =
+              sortOrderRaw !== undefined &&
+              sortOrderRaw !== null &&
+              String(sortOrderRaw).trim() &&
+              Number.isFinite(sortOrder);
+            assets.push({
+              gi,
+              ii,
+              imageIndex,
+              image,
+              contentId,
+              name,
+              product: normalizeGalleryProduct(productRaw, fallbackText),
+              status: normalizeGalleryStatus(statusRaw, metadata, article),
+              note: note || "暂无备注",
+              uploadedAt,
+              updatedAt,
+              sortOrder: hasSortOrder ? sortOrder : assets.length,
+              sourceIndex: assets.length,
+            });
+          });
+        });
+        return assets;
+      }
+      function getFilteredPriceGalleryAssets(gi) {
+        const query = galleryViewState.query.trim().toLowerCase();
+        const filtered = getPriceGalleryAssets(gi).filter((asset) => {
+          const matchesQuery =
+            !query ||
+            `${asset.name} ${asset.note} ${asset.product}`
+              .toLowerCase()
+              .includes(query);
+          const matchesProduct =
+            galleryViewState.product === "all" ||
+            asset.product === galleryViewState.product;
+          const matchesStatus =
+            galleryViewState.status === "all" ||
+            asset.status === galleryViewState.status;
+          return matchesQuery && matchesProduct && matchesStatus;
+        });
+        return filtered.sort((a, b) => {
+          if (galleryViewState.sort === "updated") {
+            return (
+              galleryTimestamp(b.updatedAt) -
+                galleryTimestamp(a.updatedAt) ||
+              a.sourceIndex - b.sourceIndex
+            );
+          }
+          if (galleryViewState.sort === "uploaded") {
+            return (
+              galleryTimestamp(b.uploadedAt) -
+                galleryTimestamp(a.uploadedAt) ||
+              a.sourceIndex - b.sourceIndex
+            );
+          }
+          if (galleryViewState.sort === "name") {
+            return (
+              a.name.localeCompare(b.name, "zh-CN") ||
+              a.sourceIndex - b.sourceIndex
+            );
+          }
+          return a.sortOrder - b.sortOrder || a.sourceIndex - b.sourceIndex;
+        });
+      }
+      function gallerySelectOptions(options, selected) {
+        return options
+          .map(
+            ([value, label]) =>
+              `<option value="${esc(value)}" ${value === selected ? "selected" : ""}>${esc(label)}</option>`,
+          )
+          .join("");
+      }
+      function closeGalleryMenus(except = null) {
+        document.querySelectorAll(".gallery-more[open]").forEach((details) => {
+          if (details !== except) details.open = false;
+        });
+        document.querySelectorAll(".gallery-card.menu-open").forEach((card) => {
+          if (!except || card !== except.closest(".gallery-card")) {
+            card.classList.remove("menu-open");
+          }
+        });
+      }
+      function positionGalleryMenu(details) {
+        if (!details?.open) return;
+        const summary = details.querySelector("summary");
+        const menu = details.querySelector(".gallery-more-menu");
+        const card = details.closest(".gallery-card");
+        if (!summary || !menu || !card) return;
+        const summaryRect = summary.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        const viewportWidth = document.documentElement.clientWidth;
+        const viewportHeight = window.innerHeight;
+        const width = Math.max(
+          120,
+          Math.min(220, cardRect.width - 16, viewportWidth - 16),
+        );
+        const preferredLeft = summaryRect.right - width;
+        const withinCardLeft = Math.min(
+          Math.max(preferredLeft, cardRect.left + 8),
+          cardRect.right - width - 8,
+        );
+        const left = Math.min(
+          Math.max(withinCardLeft, 8),
+          viewportWidth - width - 8,
+        );
+        menu.style.width = `${width}px`;
+        menu.style.left = `${left}px`;
+        const menuHeight = menu.offsetHeight;
+        const belowTop = summaryRect.bottom + 6;
+        const top =
+          belowTop + menuHeight <= viewportHeight - 8
+            ? belowTop
+            : Math.max(8, summaryRect.top - menuHeight - 6);
+        menu.style.top = `${top}px`;
+      }
+      function handleGalleryMenuToggle(details) {
+        if (!details.open) {
+          details.closest(".gallery-card")?.classList.remove("menu-open");
+          return;
+        }
+        closeGalleryMenus(details);
+        details.closest(".gallery-card")?.classList.add("menu-open");
+        requestAnimationFrame(() => positionGalleryMenu(details));
+      }
+      function showGalleryUploadNotice() {
+        closeGalleryMenus();
+        toast("价格图上传将在下一阶段开放");
+      }
+      function renderPriceGalleryCard(asset) {
+        const statusLabel =
+          asset.status === "history" ? "历史版本" : "当前使用";
+        const imageHtml = asset.image
+          ? `<button type="button" class="gallery-thumb-button" onclick="openImage(${asset.gi},${asset.ii},${asset.imageIndex})" aria-label="放大查看：${esc(asset.name)}"><img src="${esc(asset.image.src)}" alt="${esc(asset.image.alt || asset.name)}" loading="lazy" onerror="this.parentElement.hidden=true;this.closest('.gallery-thumb').querySelector('.gallery-thumb-fallback').hidden=false"></button><div class="gallery-thumb-fallback" hidden>图片暂时无法显示，原记录仍保留</div>`
+          : '<div class="gallery-thumb-fallback">暂无图片，原记录仍保留</div>';
+        return `<article class="gallery-card"><div class="gallery-thumb">${imageHtml}</div><div class="gallery-card-body"><div class="gallery-card-tags"><span class="gallery-status ${asset.status}">${statusLabel}</span><span class="gallery-product">${esc(asset.product)}</span></div><h2>${esc(asset.name)}</h2><p class="gallery-note">${esc(asset.note)}</p><dl class="gallery-dates"><div><dt>上传时间</dt><dd>${esc(formatGalleryDate(asset.uploadedAt))}</dd></div><div><dt>最后更新</dt><dd>${esc(formatGalleryDate(asset.updatedAt))}</dd></div></dl><div class="gallery-card-actions" aria-label="${esc(asset.name)}的操作"><button type="button" class="btn" disabled title="后续阶段开放">复制</button><button type="button" class="btn" disabled title="后续阶段开放">下载</button><button type="button" class="btn" disabled title="后续阶段开放">编辑</button><details class="gallery-more" ontoggle="handleGalleryMenuToggle(this)"><summary>更多</summary><div class="gallery-more-menu"><button type="button" disabled>替换图片 · 后续阶段开放</button><button type="button" disabled>移入历史版本 · 后续阶段开放</button><button type="button" disabled>删除 · 后续阶段开放</button></div></details></div></div></article>`;
+      }
+      function renderPriceGalleryResults() {
+        if (mode !== "gallery") return;
+        closeGalleryMenus();
+        const assets = getFilteredPriceGalleryAssets(activeG);
+        const summary = $("#gallerySummary");
+        const results = $("#galleryResults");
+        if (!summary || !results) return;
+        summary.textContent = `共 ${assets.length} 张素材`;
+        results.innerHTML = assets.length
+          ? `<div class="gallery-grid">${assets
+              .map(renderPriceGalleryCard)
+              .join("")}</div>`
+          : '<div class="gallery-empty"><b>没有符合条件的价格图</b><span>可调整搜索词或筛选条件；现有数据没有被修改。</span></div>';
+      }
+      function updatePriceGalleryFilter(key, value) {
+        if (!["query", "product", "status", "sort"].includes(key)) return;
+        closeGalleryMenus();
+        galleryViewState[key] = String(value || "");
+        renderPriceGalleryResults();
+      }
+      function renderPriceGallery() {
+        const productOptions = [
+          ["all", "全部"],
+          ...GALLERY_PRODUCTS.map((product) => [product, product]),
+        ];
+        closeGalleryMenus();
+        $("#main").innerHTML = `<section class="gallery-shell" aria-labelledby="galleryTitle"><header class="gallery-header"><div><p class="gallery-eyebrow">产品价格图</p><h1 id="galleryTitle">价格图素材库</h1><p>集中查看并筛选现有价格图。第一阶段仅提供兼容展示，不改写旧数据。</p></div><button type="button" class="btn primary gallery-upload" onclick="showGalleryUploadNotice()">上传价格图</button></header><div class="gallery-toolbar" role="search" aria-label="价格图筛选"><label class="gallery-search-field"><span>搜索</span><input id="gallerySearch" type="search" value="${esc(galleryViewState.query)}" placeholder="搜索图片名称、备注或产品" oninput="updatePriceGalleryFilter('query',this.value)"></label><label><span>产品分类</span><select onchange="updatePriceGalleryFilter('product',this.value)">${gallerySelectOptions(productOptions, galleryViewState.product)}</select></label><label><span>状态</span><select onchange="updatePriceGalleryFilter('status',this.value)">${gallerySelectOptions([["all", "全部"], ["current", "当前使用"], ["history", "历史版本"]], galleryViewState.status)}</select></label><label><span>排序方式</span><select onchange="updatePriceGalleryFilter('sort',this.value)">${gallerySelectOptions([["custom", "自定义排序"], ["updated", "最近更新"], ["uploaded", "最近上传"], ["name", "名称排序"]], galleryViewState.sort)}</select></label></div><div class="gallery-subbar"><p>微信粘贴与上传将在后续阶段开放；普通文章现有的粘贴图片功能保持不变。</p><strong id="gallerySummary"></strong></div><div id="galleryResults" aria-live="polite"></div></section>`;
+        renderPriceGalleryResults();
+      }
+      function openPriceGallery(gi) {
+        if (!isProductCenterGroup(groups[gi])) return;
+        activeG = gi;
+        activeI = 0;
+        setMode("gallery");
+        renderNav();
+        renderGroupList(gi);
+        renderPriceGallery();
+      }
       function id(g, i) {
         return g + "-" + i;
       }
@@ -903,7 +1300,11 @@ const KEY = "zy_kb_system_v2",
           });
       }
       function setMode(m) {
+        if (m !== "gallery") closeGalleryMenus();
         mode = m;
+        document
+          .querySelector(".app")
+          ?.classList.toggle("gallery-mode", m === "gallery");
         document
           .querySelectorAll(".navbtn[data-mode]")
           .forEach((x) => x.classList.toggle("on", x.dataset.mode === m));
@@ -913,7 +1314,7 @@ const KEY = "zy_kb_system_v2",
         $("#cats").innerHTML = groups
           .map((g, gi) => {
             total += g.items.length;
-            return `<button class="navbtn ${mode === "group" && gi === activeG ? "on" : ""}" onclick="openGroup(${gi})">📁 ${esc(g.title)} <em>${g.items.length}</em></button>`;
+            return `<button class="navbtn ${(mode === "group" || mode === "gallery") && gi === activeG ? "on" : ""}" onclick="openGroup(${gi})">📁 ${esc(g.title)} <em>${g.items.length}</em></button>`;
           })
           .join("");
         $("#favCount").textContent = favs.length;
@@ -941,10 +1342,7 @@ const KEY = "zy_kb_system_v2",
         activeI = 0;
         setMode("group");
         renderNav();
-        renderList(
-          groups[gi].items.map((x, ii) => ({ g: groups[gi], gi, x, ii })),
-          groups[gi].title,
-        );
+        renderGroupList(gi);
         groups[gi].items.length
           ? openDoc(gi, 0)
           : ($("#main").innerHTML =
@@ -957,10 +1355,7 @@ const KEY = "zy_kb_system_v2",
         let k = getContentId(gi, ii);
         recent = [k, ...recent.filter((x) => x !== k)].slice(0, 20);
         save();
-        renderList(
-          groups[gi].items.map((x, j) => ({ g: groups[gi], gi, x, ii: j })),
-          groups[gi].title,
-        );
+        renderGroupList(gi);
         renderDoc();
       }
       function renderDoc() {
@@ -995,15 +1390,7 @@ const KEY = "zy_kb_system_v2",
         }
         editing = !editing;
         renderDoc();
-        renderList(
-          groups[activeG].items.map((x, j) => ({
-            g: groups[activeG],
-            gi: activeG,
-            x,
-            ii: j,
-          })),
-          groups[activeG].title,
-        );
+        renderGroupList(activeG);
       }
       function copyCurrent() {
         let x = groups[activeG]?.items[activeI];
@@ -1127,10 +1514,27 @@ const KEY = "zy_kb_system_v2",
         else if (mode === "home") showHome();
         else if (mode === "fav") showFavs();
         else if (mode === "recent") showRecent();
+        else if (mode === "gallery") {
+          renderGroupList(activeG);
+          renderPriceGallery();
+        }
         else openGroup(activeG);
       });
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") closeImageViewer();
+        if (event.key === "Escape") {
+          closeImageViewer();
+          closeGalleryMenus();
+        }
+      });
+      document.addEventListener("click", (event) => {
+        if (!event.target.closest(".gallery-more")) closeGalleryMenus();
+      });
+      window.addEventListener("resize", () => closeGalleryMenus());
+      $(".main")?.addEventListener("scroll", () => {
+        const openMenu = document.querySelector(".gallery-more[open]");
+        if (openMenu) {
+          requestAnimationFrame(() => positionGalleryMenu(openMenu));
+        }
       });
       renderNav();
       showHome();
