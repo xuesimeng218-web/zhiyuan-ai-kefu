@@ -3,6 +3,7 @@ const KEY = "zy_kb_system_v2",
         RKEY = "zy_kb_recent_v2",
         IKEY = "zy_kb_article_images_v2",
         CATEGORY_ORDER_KEY = "zy_kb_category_order_v1",
+        ARTICLE_ORDER_KEY = "zy_kb_article_order_v1",
         ARTICLE_CATEGORY_OVERRIDE_KEY = "zy_kb_article_category_overrides_v1",
         PRICE_GALLERY_META_KEY = "zy_kb_price_gallery_meta_v1",
         PRICE_GALLERY_DB_NAME = "zy_kb_price_gallery_db",
@@ -27,6 +28,7 @@ const KEY = "zy_kb_system_v2",
       let categoryOrder = loadCategoryOrder();
       let articleCategoryOverrides = loadArticleCategoryOverrides();
       applyArticleCategoryOverrides();
+      let articleOrder = loadArticleOrder();
       let favs = normalizeStoredIds(JSON.parse(localStorage.getItem(FKEY) || "[]"));
       let recent = normalizeStoredIds(JSON.parse(localStorage.getItem(RKEY) || "[]"));
       const storedArticleImages = JSON.parse(localStorage.getItem(IKEY) || "{}");
@@ -84,6 +86,7 @@ const KEY = "zy_kb_system_v2",
         sort: "custom",
       };
       let categoryDragState = null;
+      let articleDragState = null;
       let categoryScrollObserver = null;
       let moveDialogReturnFocus = null;
       let latestMoveUndo = null;
@@ -729,10 +732,7 @@ const KEY = "zy_kb_system_v2",
       function renderGroupList(gi) {
         const group = groups[gi];
         if (!group) return;
-        renderList(
-          group.items.map((x, ii) => ({ g: group, gi, x, ii })),
-          group.title,
-        );
+        renderList(getOrderedArticleRecords(gi), group.title);
         if (!isProductCenterGroup(group) || $("#q").value.trim()) return;
         $("#items").innerHTML =
           renderGallerySystemEntry(gi) + $("#items").innerHTML;
@@ -3271,6 +3271,28 @@ const KEY = "zy_kb_system_v2",
         const previousOverride = articleCategoryOverrides[contentId]
           ? structuredClone(articleCategoryOverrides[contentId])
           : null;
+        const previousArticleOrder = structuredClone(articleOrder);
+        const sourceOrder = getEffectiveArticleOrderIds(current.gi);
+        const sourceOrderIndex = sourceOrder.indexOf(contentId);
+        const targetOrder = getEffectiveArticleOrderIds(targetIndex);
+        let nextArticleOrder = removeArticleFromOrderState(
+          articleOrder,
+          contentId,
+        );
+        nextArticleOrder = setArticleOrderForGroup(
+          nextArticleOrder,
+          current.gi,
+          sourceOrder.filter((savedId) => savedId !== contentId),
+        );
+        nextArticleOrder = setArticleOrderForGroup(
+          nextArticleOrder,
+          targetIndex,
+          [
+            contentId,
+            ...targetOrder.filter((savedId) => savedId !== contentId),
+          ],
+        );
+        if (!persistArticleOrder(nextArticleOrder)) return;
         articleCategoryOverrides[contentId] = {
           content_id: contentId,
           source_category_id:
@@ -3279,6 +3301,7 @@ const KEY = "zy_kb_system_v2",
           moved_at: new Date().toISOString(),
         };
         if (!persistArticleCategoryOverrides()) {
+          persistArticleOrder(previousArticleOrder);
           if (previousOverride) {
             articleCategoryOverrides[contentId] = previousOverride;
           } else {
@@ -3288,6 +3311,7 @@ const KEY = "zy_kb_system_v2",
         }
         const result = relocateArticleByContentId(contentId, targetCategoryId);
         if (!result) {
+          persistArticleOrder(previousArticleOrder);
           if (previousOverride) {
             articleCategoryOverrides[contentId] = previousOverride;
           } else {
@@ -3307,6 +3331,7 @@ const KEY = "zy_kb_system_v2",
           sourceTitle,
           targetCategoryId,
           previousOverride,
+          sourceOrderIndex,
         });
       }
       function undoLastArticleMove() {
@@ -3324,6 +3349,38 @@ const KEY = "zy_kb_system_v2",
         }
         clearTimeout(window.moveUndoTimer);
         latestMoveUndo = null;
+        const previousArticleOrder = structuredClone(articleOrder);
+        const current = findArticleByContentId(state.contentId);
+        const sourceIndex = findGroupIndexByCategoryId(state.sourceCategoryId);
+        const targetOrder = getEffectiveArticleOrderIds(current.gi);
+        const sourceOrder = getEffectiveArticleOrderIds(sourceIndex).filter(
+          (contentId) => contentId !== state.contentId,
+        );
+        const restoreIndex = Math.max(
+          0,
+          Math.min(
+            Number.isInteger(state.sourceOrderIndex)
+              ? state.sourceOrderIndex
+              : 0,
+            sourceOrder.length,
+          ),
+        );
+        sourceOrder.splice(restoreIndex, 0, state.contentId);
+        let restoredArticleOrder = removeArticleFromOrderState(
+          articleOrder,
+          state.contentId,
+        );
+        restoredArticleOrder = setArticleOrderForGroup(
+          restoredArticleOrder,
+          current.gi,
+          targetOrder.filter((contentId) => contentId !== state.contentId),
+        );
+        restoredArticleOrder = setArticleOrderForGroup(
+          restoredArticleOrder,
+          sourceIndex,
+          sourceOrder,
+        );
+        if (!persistArticleOrder(restoredArticleOrder)) return;
         if (state.previousOverride) {
           articleCategoryOverrides[state.contentId] = structuredClone(
             state.previousOverride,
@@ -3332,6 +3389,7 @@ const KEY = "zy_kb_system_v2",
           delete articleCategoryOverrides[state.contentId];
         }
         if (!persistArticleCategoryOverrides()) {
+          persistArticleOrder(previousArticleOrder);
           articleCategoryOverrides[state.contentId] = currentOverride;
           return;
         }
@@ -3340,6 +3398,7 @@ const KEY = "zy_kb_system_v2",
           state.sourceCategoryId,
         );
         if (!result) {
+          persistArticleOrder(previousArticleOrder);
           articleCategoryOverrides[state.contentId] = currentOverride;
           persistArticleCategoryOverrides();
           toast("当前移动无法撤销");
@@ -3368,6 +3427,122 @@ const KEY = "zy_kb_system_v2",
       }
       function getCategoryOrderId(group, index) {
         return String(group?.category_id || `group_${index}`);
+      }
+      function normalizeArticleOrderIds(values) {
+        if (!Array.isArray(values)) return [];
+        const seen = new Set();
+        return values
+          .map((value) => (typeof value === "string" ? value.trim() : ""))
+          .filter((contentId) => {
+            if (
+              !isStableContentId(contentId) ||
+              seen.has(contentId)
+            ) {
+              return false;
+            }
+            seen.add(contentId);
+            return true;
+          });
+      }
+      function loadArticleOrder() {
+        try {
+          const parsed = JSON.parse(
+            localStorage.getItem(ARTICLE_ORDER_KEY) || "{}",
+          );
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return {};
+          }
+          const normalized = {};
+          Object.entries(parsed).forEach(([categoryId, values]) => {
+            const stableCategoryId = String(categoryId || "").trim();
+            if (!stableCategoryId || !Array.isArray(values)) return;
+            normalized[stableCategoryId] = normalizeArticleOrderIds(values);
+          });
+          return normalized;
+        } catch (error) {
+          return {};
+        }
+      }
+      function persistArticleOrder(nextOrder) {
+        const normalized = {};
+        Object.entries(nextOrder || {}).forEach(([categoryId, values]) => {
+          const stableCategoryId = String(categoryId || "").trim();
+          if (!stableCategoryId || !Array.isArray(values)) return;
+          normalized[stableCategoryId] = normalizeArticleOrderIds(values);
+        });
+        try {
+          localStorage.setItem(ARTICLE_ORDER_KEY, JSON.stringify(normalized));
+          articleOrder = normalized;
+          return true;
+        } catch (error) {
+          toast("文章顺序保存失败");
+          return false;
+        }
+      }
+      function getEffectiveArticleOrderIds(groupIndex, orderState = articleOrder) {
+        const group = groups[groupIndex];
+        if (!group) return [];
+        const categoryId = getCategoryOrderId(group, groupIndex);
+        const currentIds = group.items
+          .map((article) => article?.content_id)
+          .filter(isStableContentId);
+        const currentSet = new Set(currentIds);
+        const ordered = normalizeArticleOrderIds(orderState?.[categoryId]).filter(
+          (contentId) => currentSet.has(contentId),
+        );
+        const used = new Set(ordered);
+        currentIds.forEach((contentId) => {
+          if (used.has(contentId)) return;
+          used.add(contentId);
+          ordered.push(contentId);
+        });
+        return ordered;
+      }
+      function setArticleOrderForGroup(orderState, groupIndex, contentIds) {
+        const group = groups[groupIndex];
+        if (!group) return structuredClone(orderState || {});
+        const next = structuredClone(orderState || {});
+        next[getCategoryOrderId(group, groupIndex)] =
+          normalizeArticleOrderIds(contentIds);
+        return next;
+      }
+      function removeArticleFromOrderState(orderState, contentId) {
+        const next = structuredClone(orderState || {});
+        Object.keys(next).forEach((categoryId) => {
+          next[categoryId] = normalizeArticleOrderIds(next[categoryId]).filter(
+            (savedId) => savedId !== contentId,
+          );
+        });
+        return next;
+      }
+      function getOrderedArticleRecords(groupIndex) {
+        const group = groups[groupIndex];
+        if (!group) return [];
+        const records = group.items.map((x, ii) => ({
+          g: group,
+          gi: groupIndex,
+          x,
+          ii,
+        }));
+        const recordsById = new Map();
+        records.forEach((record) => {
+          const contentId = record.x?.content_id;
+          if (isStableContentId(contentId) && !recordsById.has(contentId)) {
+            recordsById.set(contentId, record);
+          }
+        });
+        const ordered = [];
+        const used = new Set();
+        getEffectiveArticleOrderIds(groupIndex).forEach((contentId) => {
+          const record = recordsById.get(contentId);
+          if (!record || used.has(record)) return;
+          used.add(record);
+          ordered.push(record);
+        });
+        records.forEach((record) => {
+          if (!used.has(record)) ordered.push(record);
+        });
+        return ordered;
       }
       function getOrderedGroupIndexes() {
         const ordered = [];
@@ -3688,6 +3863,232 @@ const KEY = "zy_kb_system_v2",
             ?.focus(),
         );
       }
+      function clearArticleDropIndicators() {
+        document
+          .querySelectorAll(
+            ".docitem.article-sortable.is-dragging, .docitem.article-sortable.drop-before, .docitem.article-sortable.drop-after",
+          )
+          .forEach((item) =>
+            item.classList.remove(
+              "is-dragging",
+              "drop-before",
+              "drop-after",
+            ),
+          );
+      }
+      function findArticleSortCard(contentId) {
+        return [
+          ...document.querySelectorAll(".docitem.article-sortable"),
+        ].find((item) => item.dataset.contentId === contentId);
+      }
+      function activateArticleDrag() {
+        if (!articleDragState || articleDragState.active) return;
+        if (
+          mode !== "group" ||
+          $("#q").value.trim() ||
+          articleDragState.groupIndex !== activeG
+        ) {
+          finishArticleDrag(null, false);
+          return;
+        }
+        articleDragState.active = true;
+        articleDragState.handle.setAttribute("aria-grabbed", "true");
+        findArticleSortCard(articleDragState.contentId)?.classList.add(
+          "is-dragging",
+        );
+      }
+      function startArticleDrag(event, contentId) {
+        if (
+          (event.pointerType === "mouse" && event.button !== 0) ||
+          articleDragState ||
+          mode !== "group" ||
+          $("#q").value.trim() ||
+          !isStableContentId(contentId)
+        ) {
+          return;
+        }
+        const article = findArticleByContentId(contentId);
+        if (!article || article.gi !== activeG) return;
+        event.stopPropagation();
+        if (event.pointerType === "mouse") event.preventDefault();
+        const handle = event.currentTarget;
+        articleDragState = {
+          pointerId: event.pointerId,
+          pointerType: event.pointerType,
+          handle,
+          contentId,
+          groupIndex: activeG,
+          targetContentId: null,
+          after: false,
+          active: false,
+          startX: event.clientX,
+          startY: event.clientY,
+          timer: null,
+        };
+        handle.setPointerCapture?.(event.pointerId);
+        if (event.pointerType === "touch") {
+          articleDragState.timer = setTimeout(activateArticleDrag, 320);
+        } else {
+          activateArticleDrag();
+        }
+      }
+      function updateArticleDropTarget(clientY) {
+        if (!articleDragState?.active) return;
+        const items = [
+          ...document.querySelectorAll(".docitem.article-sortable"),
+        ].filter(
+          (item) => item.dataset.contentId !== articleDragState.contentId,
+        );
+        clearArticleDropIndicators();
+        findArticleSortCard(articleDragState.contentId)?.classList.add(
+          "is-dragging",
+        );
+        if (!items.length) {
+          articleDragState.targetContentId = null;
+          return;
+        }
+        const target = items.reduce((nearest, item) => {
+          const rect = item.getBoundingClientRect();
+          const center = rect.top + rect.height / 2;
+          const distance = Math.abs(clientY - center);
+          return !nearest || distance < nearest.distance
+            ? { item, center, distance }
+            : nearest;
+        }, null);
+        const targetContentId = target.item.dataset.contentId;
+        if (!isStableContentId(targetContentId)) {
+          articleDragState.targetContentId = null;
+          return;
+        }
+        const after = clientY > target.center;
+        articleDragState.targetContentId = targetContentId;
+        articleDragState.after = after;
+        target.item.classList.add(after ? "drop-after" : "drop-before");
+      }
+      function autoScrollArticleList(clientY) {
+        if (!articleDragState?.active) return;
+        const scroller = $(".middle");
+        if (!scroller) return;
+        const rect = scroller.getBoundingClientRect();
+        const edge = Math.min(58, rect.height / 4);
+        let delta = 0;
+        if (clientY < rect.top + edge) delta = -16;
+        else if (clientY > rect.bottom - edge) delta = 16;
+        if (delta) scroller.scrollBy({ top: delta });
+      }
+      function handleArticlePointerMove(event) {
+        if (
+          !articleDragState ||
+          event.pointerId !== articleDragState.pointerId
+        ) {
+          return;
+        }
+        if (!articleDragState.active) {
+          const distance = Math.hypot(
+            event.clientX - articleDragState.startX,
+            event.clientY - articleDragState.startY,
+          );
+          if (distance > 10) finishArticleDrag(event, false);
+          return;
+        }
+        event.preventDefault();
+        autoScrollArticleList(event.clientY);
+        updateArticleDropTarget(event.clientY);
+      }
+      function moveArticleWithinGroup(
+        groupIndex,
+        contentId,
+        targetContentId,
+        after,
+      ) {
+        if (
+          mode !== "group" ||
+          groupIndex !== activeG ||
+          $("#q").value.trim()
+        ) {
+          return false;
+        }
+        const order = getEffectiveArticleOrderIds(groupIndex);
+        const sourcePosition = order.indexOf(contentId);
+        if (
+          sourcePosition < 0 ||
+          !targetContentId ||
+          !order.includes(targetContentId) ||
+          contentId === targetContentId
+        ) {
+          return false;
+        }
+        order.splice(sourcePosition, 1);
+        const targetPosition = order.indexOf(targetContentId);
+        order.splice(targetPosition + (after ? 1 : 0), 0, contentId);
+        const nextOrder = setArticleOrderForGroup(
+          articleOrder,
+          groupIndex,
+          order,
+        );
+        if (!persistArticleOrder(nextOrder)) return false;
+        renderGroupList(groupIndex);
+        toast("文章顺序已保存");
+        return true;
+      }
+      function finishArticleDrag(event, commit = true) {
+        if (
+          !articleDragState ||
+          (event?.pointerId != null &&
+            event.pointerId !== articleDragState.pointerId)
+        ) {
+          return;
+        }
+        const state = articleDragState;
+        clearTimeout(state.timer);
+        state.handle.setAttribute("aria-grabbed", "false");
+        if (state.handle.hasPointerCapture?.(state.pointerId)) {
+          state.handle.releasePointerCapture(state.pointerId);
+        }
+        articleDragState = null;
+        clearArticleDropIndicators();
+        if (
+          commit &&
+          state.active &&
+          state.targetContentId
+        ) {
+          moveArticleWithinGroup(
+            state.groupIndex,
+            state.contentId,
+            state.targetContentId,
+            state.after,
+          );
+        }
+      }
+      function handleArticleDragKeydown(event, contentId) {
+        const backward = event.key === "ArrowUp";
+        const forward = event.key === "ArrowDown";
+        if (!backward && !forward) return;
+        if (mode !== "group" || $("#q").value.trim()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const order = getEffectiveArticleOrderIds(activeG);
+        const position = order.indexOf(contentId);
+        const nextPosition = position + (backward ? -1 : 1);
+        if (position < 0 || nextPosition < 0 || nextPosition >= order.length) {
+          return;
+        }
+        const targetContentId = order[nextPosition];
+        if (
+          moveArticleWithinGroup(
+            activeG,
+            contentId,
+            targetContentId,
+            forward,
+          )
+        ) {
+          requestAnimationFrame(() =>
+            findArticleSortCard(contentId)
+              ?.querySelector(".article-drag-handle")
+              ?.focus(),
+          );
+        }
+      }
       function save() {
         hydrateGroups();
         favs = normalizeStoredIds(favs);
@@ -3716,6 +4117,7 @@ const KEY = "zy_kb_system_v2",
           });
       }
       function setMode(m) {
+        finishArticleDrag(null, false);
         if (m !== "gallery") {
           closeGalleryMenus();
           clearGalleryThumbnailUrls();
@@ -3774,8 +4176,9 @@ const KEY = "zy_kb_system_v2",
         setMode("group");
         renderNav();
         renderGroupList(gi);
-        groups[gi].items.length
-          ? openDoc(gi, 0)
+        const firstArticle = getOrderedArticleRecords(gi)[0];
+        firstArticle
+          ? openDoc(gi, firstArticle.ii)
           : ($("#main").innerHTML =
               '<div class="empty">当前分类还没有内容。</div>');
       }
@@ -3865,18 +4268,43 @@ const KEY = "zy_kb_system_v2",
       }
       function addItem() {
         if (mode !== "group") return;
-        groups[activeG].items.push({
+        const contentId = createContentId();
+        groups[activeG].items.unshift({
           title: "新内容",
-          content_id: createContentId(),
+          content_id: contentId,
           paragraphs: ["请在这里输入内容。"],
         });
-        activeI = groups[activeG].items.length - 1;
+        const nextOrder = setArticleOrderForGroup(
+          articleOrder,
+          activeG,
+          [
+            contentId,
+            ...getEffectiveArticleOrderIds(activeG).filter(
+              (savedId) => savedId !== contentId,
+            ),
+          ],
+        );
+        if (!persistArticleOrder(nextOrder)) {
+          groups[activeG].items.shift();
+          return;
+        }
+        activeI = 0;
         save();
         editing = true;
         openDoc(activeG, activeI);
       }
       function deleteCurrent() {
         if (!confirm("确定删除这条内容吗？")) return;
+        const article = groups[activeG]?.items?.[activeI];
+        const contentId = article?.content_id;
+        if (
+          isStableContentId(contentId) &&
+          !persistArticleOrder(
+            removeArticleFromOrderState(articleOrder, contentId),
+          )
+        ) {
+          return;
+        }
         groups[activeG].items.splice(activeI, 1);
         activeI = 0;
         save();
@@ -3976,6 +4404,7 @@ const KEY = "zy_kb_system_v2",
           closeGalleryUploadDialog();
           closeGalleryEditDialog();
           finishGalleryAssetDrag(null, false);
+          finishArticleDrag(null, false);
           closeMoveDialog();
         }
       });
@@ -3988,6 +4417,9 @@ const KEY = "zy_kb_system_v2",
       document.addEventListener("pointermove", handleCategoryPointerMove, {
         passive: false,
       });
+      document.addEventListener("pointermove", handleArticlePointerMove, {
+        passive: false,
+      });
       document.addEventListener("pointermove", handleGalleryAssetPointerMove, {
         passive: false,
       });
@@ -3995,10 +4427,16 @@ const KEY = "zy_kb_system_v2",
         finishCategoryDrag(event),
       );
       document.addEventListener("pointerup", (event) =>
+        finishArticleDrag(event),
+      );
+      document.addEventListener("pointerup", (event) =>
         finishGalleryAssetDrag(event),
       );
       document.addEventListener("pointercancel", (event) =>
         finishCategoryDrag(event, false),
+      );
+      document.addEventListener("pointercancel", (event) =>
+        finishArticleDrag(event, false),
       );
       document.addEventListener("pointercancel", (event) =>
         finishGalleryAssetDrag(event, false),
