@@ -804,6 +804,18 @@
         max-width: 100%;
         flex: 0 0 auto;
       }
+      .gallery-header-actions {
+        display: flex;
+        width: min(100%, 330px);
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .gallery-header-actions .btn {
+        min-width: 88px;
+        padding-inline: 12px;
+        white-space: nowrap;
+      }
       .gallery-upload {
         min-width: 112px;
         max-width: 100%;
@@ -1217,7 +1229,7 @@
         margin-top: 20px;
       }
       .gallery-upload-dialog footer .btn:disabled,
-      .gallery-upload:disabled {
+      .gallery-header-actions .btn:disabled {
         cursor: wait;
         opacity: 0.58;
       }
@@ -1636,6 +1648,9 @@
         .gallery-subbar {
           align-items: stretch;
           flex-direction: column;
+        }
+        .gallery-header-actions {
+          justify-content: flex-start;
         }
         .gallery-toolbar,
         .gallery-grid {
