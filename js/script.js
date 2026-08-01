@@ -65,6 +65,7 @@ const KEY = "zy_kb_system_v2",
         "image/png",
         "image/webp",
       ]);
+      let galleryMetaLoadError = false;
       let priceGalleryMeta = loadPriceGalleryMeta();
       let priceGalleryDbPromise = null;
       let galleryUploadState = null;
@@ -73,6 +74,8 @@ const KEY = "zy_kb_system_v2",
       let galleryViewerUrl = "";
       let galleryViewerRequestToken = 0;
       let galleryThumbnailRenderToken = 0;
+      let galleryEditState = null;
+      let galleryAssetDragState = null;
       const galleryThumbnailUrls = new Map();
       const galleryViewState = {
         query: "",
@@ -765,7 +768,7 @@ const KEY = "zy_kb_system_v2",
           STORAGE_FULL:
             "浏览器存储空间不足，请释放本机浏览器空间后重试。",
           META_SAVE_FAILED:
-            "价格图元数据保存失败，本次图片未保留，请重试。",
+            "价格图元数据保存失败，现有数据保持不变，请重试。",
           NO_CLIPBOARD_IMAGE: "剪贴板中未检测到图片。",
           CLIPBOARD_UNSUPPORTED:
             "当前浏览器不支持复制图片，请使用下载功能。",
@@ -809,16 +812,24 @@ const KEY = "zy_kb_system_v2",
           const parsed = JSON.parse(
             localStorage.getItem(PRICE_GALLERY_META_KEY) || "[]",
           );
-          if (!Array.isArray(parsed)) return [];
+          if (!Array.isArray(parsed)) {
+            galleryMetaLoadError = true;
+            return [];
+          }
           const seen = new Set();
-          return parsed
-            .map(sanitizeGalleryMeta)
-            .filter((asset) => {
-              if (!asset || seen.has(asset.assetId)) return false;
-              seen.add(asset.assetId);
-              return true;
-            });
+          const normalized = [];
+          parsed.forEach((raw, index) => {
+            const asset = sanitizeGalleryMeta(raw, index);
+            if (!asset || seen.has(asset.assetId)) {
+              galleryMetaLoadError = true;
+              return;
+            }
+            seen.add(asset.assetId);
+            normalized.push(asset);
+          });
+          return normalized;
         } catch (error) {
+          galleryMetaLoadError = true;
           return [];
         }
       }
@@ -832,6 +843,7 @@ const KEY = "zy_kb_system_v2",
             JSON.stringify(normalized),
           );
           priceGalleryMeta = normalized;
+          galleryMetaLoadError = false;
           return true;
         } catch (error) {
           throw createGalleryError(
@@ -841,6 +853,13 @@ const KEY = "zy_kb_system_v2",
             error,
           );
         }
+      }
+      function ensurePriceGalleryMetaWritable() {
+        if (!galleryMetaLoadError) return true;
+        alert(
+          "价格图元数据存在异常。为避免覆盖现有记录，本次修改未保存；请先备份并检查浏览器数据。",
+        );
+        return false;
       }
       function openPriceGalleryDb() {
         if (!globalThis.indexedDB) {
@@ -1456,6 +1475,176 @@ const KEY = "zy_kb_system_v2",
         if (state?.previewUrl) URL.revokeObjectURL(state.previewUrl);
         if (!force) state?.returnFocus?.focus?.();
       }
+      function ensureGalleryEditDialog() {
+        let backdrop = $("#priceGalleryEditDialog");
+        if (backdrop) return backdrop;
+        backdrop = document.createElement("div");
+        backdrop.id = "priceGalleryEditDialog";
+        backdrop.className = "gallery-upload-backdrop gallery-edit-backdrop";
+        backdrop.hidden = true;
+        backdrop.setAttribute("aria-hidden", "true");
+        backdrop.innerHTML = `<section class="gallery-upload-dialog gallery-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="galleryEditTitle"><header><div><p>价格图素材</p><h2 id="galleryEditTitle">编辑素材信息</h2></div><button type="button" class="gallery-upload-close" aria-label="关闭编辑素材窗口" title="关闭" onclick="closeGalleryEditDialog()">×</button></header><div class="gallery-upload-content"><div class="gallery-upload-preview gallery-edit-preview"><img id="galleryEditPreview" alt="价格图缩略图" hidden><span id="galleryEditPreviewStatus">正在读取缩略图…</span></div><div class="gallery-upload-fields"><label><span>图片名称</span><input id="galleryEditName" type="text" maxlength="120" oninput="updateGalleryEditConfirm()"></label><label><span>产品分类</span><select id="galleryEditProduct" onchange="updateGalleryEditConfirm()">${GALLERY_PRODUCTS.map((product) => `<option value="${esc(product)}">${esc(product)}</option>`).join("")}</select></label><label><span>备注</span><textarea id="galleryEditNote" rows="4" maxlength="500" placeholder="可填写价格、版本或使用场景等简短备注"></textarea></label><label><span>状态</span><select id="galleryEditStatus" onchange="updateGalleryEditConfirm()"><option value="current">当前使用</option><option value="history">历史版本</option></select></label></div></div><footer><button type="button" class="btn" onclick="closeGalleryEditDialog()">取消</button><button type="button" class="btn primary" id="savePriceGalleryEdits" onclick="savePriceGalleryEdits()">保存修改</button></footer></section>`;
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) closeGalleryEditDialog();
+        });
+        document.body.appendChild(backdrop);
+        return backdrop;
+      }
+      function isGalleryEditValid() {
+        return Boolean(
+          galleryEditState &&
+            $("#galleryEditName")?.value.trim() &&
+            GALLERY_PRODUCTS.includes($("#galleryEditProduct")?.value) &&
+            ["current", "history"].includes($("#galleryEditStatus")?.value),
+        );
+      }
+      function updateGalleryEditConfirm() {
+        const button = $("#savePriceGalleryEdits");
+        if (button) button.disabled = !isGalleryEditValid();
+      }
+      async function openPriceGalleryEdit(assetId) {
+        if (
+          mode !== "gallery" ||
+          galleryUploadBusy ||
+          galleryStorageBusy ||
+          galleryUploadState
+        ) {
+          return;
+        }
+        const asset = priceGalleryMeta.find((item) => item.assetId === assetId);
+        if (!asset) {
+          toast("素材记录不存在");
+          return;
+        }
+        closeGalleryMenus();
+        closeGalleryEditDialog(true);
+        const backdrop = ensureGalleryEditDialog();
+        const state = {
+          assetId,
+          previewUrl: "",
+          returnFocus: document.activeElement,
+        };
+        galleryEditState = state;
+        $("#galleryEditName").value = asset.name;
+        $("#galleryEditProduct").value = asset.productCategory;
+        $("#galleryEditNote").value = asset.note;
+        $("#galleryEditStatus").value = asset.status;
+        const preview = $("#galleryEditPreview");
+        const previewStatus = $("#galleryEditPreviewStatus");
+        preview.hidden = true;
+        preview.removeAttribute("src");
+        preview.alt = `${asset.name}缩略图`;
+        previewStatus.hidden = false;
+        previewStatus.textContent = "正在读取缩略图…";
+        backdrop.hidden = false;
+        backdrop.setAttribute("aria-hidden", "false");
+        document.body.classList.add("editing-gallery-asset");
+        updateGalleryEditConfirm();
+        requestAnimationFrame(() => $("#galleryEditName")?.focus());
+        try {
+          const record = await getPriceGalleryBlobRecord(
+            PRICE_GALLERY_THUMBNAIL_STORE,
+            assetId,
+          );
+          if (galleryEditState !== state || backdrop.hidden) return;
+          if (!(record?.blob instanceof Blob)) {
+            previewStatus.textContent = "缩略图暂时无法读取";
+            return;
+          }
+          state.previewUrl = URL.createObjectURL(record.blob);
+          preview.src = state.previewUrl;
+          preview.hidden = false;
+          previewStatus.textContent = `${record.width || asset.width} × ${record.height || asset.height} · 只读预览`;
+        } catch (error) {
+          if (galleryEditState === state) {
+            previewStatus.textContent = "缩略图暂时无法读取";
+          }
+        }
+      }
+      function closeGalleryEditDialog(force = false) {
+        const backdrop = $("#priceGalleryEditDialog");
+        if (!backdrop || backdrop.hidden) return;
+        backdrop.hidden = true;
+        backdrop.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("editing-gallery-asset");
+        const state = galleryEditState;
+        galleryEditState = null;
+        if (state?.previewUrl) URL.revokeObjectURL(state.previewUrl);
+        const preview = $("#galleryEditPreview");
+        if (preview) {
+          preview.hidden = true;
+          preview.removeAttribute("src");
+        }
+        if (!force) state?.returnFocus?.focus?.();
+      }
+      function savePriceGalleryEdits() {
+        if (!isGalleryEditValid() || !ensurePriceGalleryMetaWritable()) return;
+        const assetId = galleryEditState.assetId;
+        const index = priceGalleryMeta.findIndex(
+          (asset) => asset.assetId === assetId,
+        );
+        if (index < 0) {
+          closeGalleryEditDialog();
+          toast("素材记录不存在");
+          return;
+        }
+        const nextAsset = {
+          ...priceGalleryMeta[index],
+          name: $("#galleryEditName").value.trim(),
+          productCategory: $("#galleryEditProduct").value,
+          note: $("#galleryEditNote").value.trim(),
+          status: $("#galleryEditStatus").value,
+          updatedAt: new Date().toISOString(),
+        };
+        const nextMeta = priceGalleryMeta.map((asset, assetIndex) =>
+          assetIndex === index ? nextAsset : asset,
+        );
+        try {
+          persistPriceGalleryMeta(nextMeta);
+        } catch (error) {
+          showGalleryError(error);
+          return;
+        }
+        closeGalleryEditDialog();
+        renderPriceGalleryResults();
+        toast("素材信息已更新");
+      }
+      function togglePriceGalleryAssetStatus(assetId) {
+        closeGalleryMenus();
+        if (galleryUploadBusy || galleryStorageBusy || galleryEditState) return;
+        if (!ensurePriceGalleryMetaWritable()) return;
+        const index = priceGalleryMeta.findIndex(
+          (asset) => asset.assetId === assetId,
+        );
+        if (index < 0) {
+          toast("素材记录不存在");
+          return;
+        }
+        const asset = priceGalleryMeta[index];
+        const nextStatus = asset.status === "history" ? "current" : "history";
+        const action =
+          nextStatus === "history" ? "移入历史版本" : "恢复为当前使用";
+        if (!confirm(`确认将“${asset.name}”${action}吗？`)) return;
+        const nextMeta = priceGalleryMeta.map((item, assetIndex) =>
+          assetIndex === index
+            ? {
+                ...item,
+                status: nextStatus,
+                updatedAt: new Date().toISOString(),
+              }
+            : item,
+        );
+        try {
+          persistPriceGalleryMeta(nextMeta);
+        } catch (error) {
+          showGalleryError(error);
+          return;
+        }
+        renderPriceGalleryResults();
+        toast(
+          nextStatus === "history" ? "已移入历史版本" : "已恢复为当前使用",
+        );
+      }
       function formatFileSize(bytes) {
         const value = Number(bytes) || 0;
         if (value < 1024) return `${value} B`;
@@ -1463,7 +1652,14 @@ const KEY = "zy_kb_system_v2",
         return `${(value / (1024 * 1024)).toFixed(2)} MB`;
       }
       async function startPriceGalleryUpload(file, source = "file") {
-        if (galleryUploadBusy || galleryStorageBusy || !file) return;
+        if (
+          galleryUploadBusy ||
+          galleryStorageBusy ||
+          galleryEditState ||
+          !file
+        ) {
+          return;
+        }
         closeGalleryMenus();
         setGalleryUploadBusy(true);
         try {
@@ -1477,7 +1673,7 @@ const KEY = "zy_kb_system_v2",
         }
       }
       function selectPriceGalleryFile() {
-        if (galleryUploadBusy || galleryStorageBusy) return;
+        if (galleryUploadBusy || galleryStorageBusy || galleryEditState) return;
         $("#priceGalleryFileInput")?.click();
       }
       function handlePriceGalleryFileInput(event) {
@@ -1492,7 +1688,8 @@ const KEY = "zy_kb_system_v2",
           !state ||
           galleryUploadBusy ||
           galleryStorageBusy ||
-          !isGalleryUploadValid()
+          !isGalleryUploadValid() ||
+          !ensurePriceGalleryMetaWritable()
         ) {
           return;
         }
@@ -1562,7 +1759,8 @@ const KEY = "zy_kb_system_v2",
           mode !== "gallery" ||
           galleryUploadBusy ||
           galleryStorageBusy ||
-          galleryUploadState
+          galleryUploadState ||
+          galleryEditState
         ) {
           return;
         }
@@ -2102,7 +2300,12 @@ const KEY = "zy_kb_system_v2",
         };
       }
       async function backupPriceGallery() {
-        if (galleryStorageBusy || galleryUploadBusy || galleryUploadState) {
+        if (
+          galleryStorageBusy ||
+          galleryUploadBusy ||
+          galleryUploadState ||
+          galleryEditState
+        ) {
           return;
         }
         setGalleryStorageBusy("backup");
@@ -2164,7 +2367,12 @@ const KEY = "zy_kb_system_v2",
         }
       }
       function selectPriceGalleryBackupFile() {
-        if (galleryStorageBusy || galleryUploadBusy || galleryUploadState) {
+        if (
+          galleryStorageBusy ||
+          galleryUploadBusy ||
+          galleryUploadState ||
+          galleryEditState
+        ) {
           return;
         }
         $("#priceGalleryBackupInput")?.click();
@@ -2202,7 +2410,13 @@ const KEY = "zy_kb_system_v2",
         }
       }
       async function restorePriceGalleryBackup(file) {
-        if (galleryStorageBusy || galleryUploadBusy || galleryUploadState) {
+        if (
+          galleryStorageBusy ||
+          galleryUploadBusy ||
+          galleryUploadState ||
+          galleryEditState ||
+          !ensurePriceGalleryMetaWritable()
+        ) {
           return;
         }
         setGalleryStorageBusy("restore");
@@ -2252,10 +2466,22 @@ const KEY = "zy_kb_system_v2",
           for (const asset of additions) {
             await verifyRestoredGalleryAsset(asset);
           }
+          const firstRestoreOrder =
+            priceGalleryMeta.reduce(
+              (highest, asset) => Math.max(highest, asset.customOrder),
+              -1,
+            ) + 1;
+          const restoredMetadata = additions
+            .map((asset) => asset.metadata)
+            .sort((a, b) => a.customOrder - b.customOrder)
+            .map((metadata, index) => ({
+              ...metadata,
+              customOrder: firstRestoreOrder + index,
+            }));
           try {
             persistPriceGalleryMeta([
               ...priceGalleryMeta,
-              ...additions.map((asset) => asset.metadata),
+              ...restoredMetadata,
             ]);
           } catch (error) {
             throw createGalleryBackupError(
@@ -2288,15 +2514,242 @@ const KEY = "zy_kb_system_v2",
           setGalleryStorageBusy("");
         }
       }
+      function clearGalleryAssetDropIndicators() {
+        document
+          .querySelectorAll(
+            ".gallery-card.is-dragging, .gallery-card.drop-before, .gallery-card.drop-after",
+          )
+          .forEach((card) =>
+            card.classList.remove(
+              "is-dragging",
+              "drop-before",
+              "drop-after",
+            ),
+          );
+      }
+      function activateGalleryAssetDrag() {
+        if (!galleryAssetDragState || galleryAssetDragState.active) return;
+        if (galleryViewState.sort !== "custom" || mode !== "gallery") {
+          finishGalleryAssetDrag(null, false);
+          return;
+        }
+        galleryAssetDragState.active = true;
+        galleryAssetDragState.handle.setAttribute("aria-grabbed", "true");
+        document
+          .querySelector(
+            `.gallery-card[data-asset-id="${CSS.escape(galleryAssetDragState.sourceId)}"]`,
+          )
+          ?.classList.add("is-dragging");
+      }
+      function startGalleryAssetDrag(event, assetId) {
+        if (
+          galleryViewState.sort !== "custom" ||
+          mode !== "gallery" ||
+          galleryAssetDragState ||
+          galleryUploadBusy ||
+          galleryStorageBusy ||
+          galleryEditState ||
+          (event.pointerType === "mouse" && event.button !== 0)
+        ) {
+          return;
+        }
+        event.stopPropagation();
+        if (event.pointerType === "mouse") event.preventDefault();
+        const handle = event.currentTarget;
+        galleryAssetDragState = {
+          pointerId: event.pointerId,
+          pointerType: event.pointerType,
+          handle,
+          sourceId: assetId,
+          targetId: "",
+          after: false,
+          active: false,
+          startX: event.clientX,
+          startY: event.clientY,
+          timer: null,
+        };
+        handle.setPointerCapture?.(event.pointerId);
+        if (event.pointerType === "touch") {
+          galleryAssetDragState.timer = setTimeout(
+            activateGalleryAssetDrag,
+            320,
+          );
+        } else {
+          activateGalleryAssetDrag();
+        }
+      }
+      function updateGalleryAssetDropTarget(clientX, clientY) {
+        if (!galleryAssetDragState?.active) return;
+        const cards = [...document.querySelectorAll(".gallery-card")].filter(
+          (card) => card.dataset.assetId !== galleryAssetDragState.sourceId,
+        );
+        clearGalleryAssetDropIndicators();
+        document
+          .querySelector(
+            `.gallery-card[data-asset-id="${CSS.escape(galleryAssetDragState.sourceId)}"]`,
+          )
+          ?.classList.add("is-dragging");
+        if (!cards.length) {
+          galleryAssetDragState.targetId = "";
+          return;
+        }
+        const target = cards.reduce((nearest, card) => {
+          const rect = card.getBoundingClientRect();
+          const centerX = rect.left + rect.width / 2;
+          const centerY = rect.top + rect.height / 2;
+          const distance = Math.hypot(clientX - centerX, clientY - centerY);
+          return !nearest || distance < nearest.distance
+            ? { card, rect, centerX, centerY, distance }
+            : nearest;
+        }, null);
+        const sameRow =
+          Math.abs(clientY - target.centerY) <= target.rect.height * 0.32;
+        const after = sameRow
+          ? clientX > target.centerX
+          : clientY > target.centerY;
+        galleryAssetDragState.targetId = target.card.dataset.assetId || "";
+        galleryAssetDragState.after = after;
+        target.card.classList.add(after ? "drop-after" : "drop-before");
+      }
+      function autoScrollPriceGallery(clientY) {
+        if (!galleryAssetDragState?.active) return;
+        const scroller = $(".main");
+        if (!scroller) return;
+        const rect = scroller.getBoundingClientRect();
+        const edge = Math.min(72, rect.height / 4);
+        let delta = 0;
+        if (clientY < rect.top + edge) delta = -16;
+        else if (clientY > rect.bottom - edge) delta = 16;
+        if (delta) scroller.scrollBy({ top: delta });
+      }
+      function handleGalleryAssetPointerMove(event) {
+        if (
+          !galleryAssetDragState ||
+          event.pointerId !== galleryAssetDragState.pointerId
+        ) {
+          return;
+        }
+        if (!galleryAssetDragState.active) {
+          const distance = Math.hypot(
+            event.clientX - galleryAssetDragState.startX,
+            event.clientY - galleryAssetDragState.startY,
+          );
+          if (distance > 10) finishGalleryAssetDrag(event, false);
+          return;
+        }
+        event.preventDefault();
+        autoScrollPriceGallery(event.clientY);
+        updateGalleryAssetDropTarget(event.clientX, event.clientY);
+      }
+      function reorderVisiblePriceGalleryAssets(sourceId, targetId, after) {
+        if (
+          galleryViewState.sort !== "custom" ||
+          sourceId === targetId ||
+          galleryUploadBusy ||
+          galleryStorageBusy ||
+          galleryEditState ||
+          !ensurePriceGalleryMetaWritable()
+        ) {
+          return false;
+        }
+        const visibleAssets = getFilteredPriceGalleryAssets();
+        const visibleIds = visibleAssets.map((asset) => asset.assetId);
+        const sourceIndex = visibleIds.indexOf(sourceId);
+        if (sourceIndex < 0 || !visibleIds.includes(targetId)) return false;
+        visibleIds.splice(sourceIndex, 1);
+        const targetIndex = visibleIds.indexOf(targetId);
+        visibleIds.splice(targetIndex + (after ? 1 : 0), 0, sourceId);
+        const visibleSet = new Set(visibleIds);
+        const fullOrder = getPriceGalleryAssets().sort(
+          (a, b) => a.sortOrder - b.sortOrder || a.sourceIndex - b.sourceIndex,
+        );
+        let visibleIndex = 0;
+        const mergedIds = fullOrder.map((asset) =>
+          visibleSet.has(asset.assetId)
+            ? visibleIds[visibleIndex++]
+            : asset.assetId,
+        );
+        const customOrderById = new Map(
+          mergedIds.map((assetId, index) => [assetId, index]),
+        );
+        const nextMeta = priceGalleryMeta.map((asset) => ({
+          ...asset,
+          customOrder: customOrderById.get(asset.assetId),
+        }));
+        try {
+          persistPriceGalleryMeta(nextMeta);
+        } catch (error) {
+          showGalleryError(error);
+          return false;
+        }
+        renderPriceGalleryResults();
+        toast("自定义顺序已保存");
+        return true;
+      }
+      function finishGalleryAssetDrag(event, commit = true) {
+        if (
+          !galleryAssetDragState ||
+          (event?.pointerId != null &&
+            event.pointerId !== galleryAssetDragState.pointerId)
+        ) {
+          return;
+        }
+        const state = galleryAssetDragState;
+        clearTimeout(state.timer);
+        state.handle.setAttribute("aria-grabbed", "false");
+        if (state.handle.hasPointerCapture?.(state.pointerId)) {
+          state.handle.releasePointerCapture(state.pointerId);
+        }
+        galleryAssetDragState = null;
+        clearGalleryAssetDropIndicators();
+        if (commit && state.active && state.targetId) {
+          reorderVisiblePriceGalleryAssets(
+            state.sourceId,
+            state.targetId,
+            state.after,
+          );
+        }
+      }
+      function handleGalleryAssetHandleKeydown(event, assetId) {
+        if (galleryViewState.sort !== "custom") return;
+        const backward = ["ArrowUp", "ArrowLeft"].includes(event.key);
+        const forward = ["ArrowDown", "ArrowRight"].includes(event.key);
+        if (!backward && !forward) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const visibleIds = getFilteredPriceGalleryAssets().map(
+          (asset) => asset.assetId,
+        );
+        const index = visibleIds.indexOf(assetId);
+        const nextIndex = index + (backward ? -1 : 1);
+        if (index < 0 || nextIndex < 0 || nextIndex >= visibleIds.length) return;
+        const targetId = visibleIds[nextIndex];
+        if (reorderVisiblePriceGalleryAssets(assetId, targetId, forward)) {
+          requestAnimationFrame(() =>
+            document
+              .querySelector(
+                `.gallery-card[data-asset-id="${CSS.escape(assetId)}"] .gallery-card-drag-handle`,
+              )
+              ?.focus(),
+          );
+        }
+      }
       function renderPriceGalleryCard(asset) {
         const statusLabel =
           asset.status === "history" ? "历史版本" : "当前使用";
+        const statusAction =
+          asset.status === "history" ? "恢复为当前使用" : "移入历史版本";
         const note = asset.note || "暂无备注";
+        const dragHandle =
+          galleryViewState.sort === "custom"
+            ? `<button type="button" class="gallery-card-drag-handle" aria-label="拖动调整“${esc(asset.name)}”的自定义顺序" title="拖动调整自定义顺序" aria-grabbed="false" onpointerdown="startGalleryAssetDrag(event,this.closest('.gallery-card').dataset.assetId)" onkeydown="handleGalleryAssetHandleKeydown(event,this.closest('.gallery-card').dataset.assetId)" onclick="event.preventDefault();event.stopPropagation()">⠿</button>`
+            : "";
         const imageHtml = `<button type="button" class="gallery-thumb-button" onclick="openPriceGalleryAsset(this.closest('.gallery-card').dataset.assetId)" aria-label="放大查看：${esc(asset.name)}"><img alt="${esc(asset.name)}" loading="lazy" hidden onerror="handleGalleryThumbnailError(this)"></button><div class="gallery-thumb-fallback">正在加载缩略图…</div>`;
-        return `<article class="gallery-card" data-asset-id="${esc(asset.assetId)}"><div class="gallery-thumb">${imageHtml}</div><div class="gallery-card-body"><div class="gallery-card-tags"><span class="gallery-status ${asset.status}">${statusLabel}</span><span class="gallery-product">${esc(asset.product)}</span></div><h2>${esc(asset.name)}</h2><p class="gallery-note">${esc(note)}</p><dl class="gallery-dates"><div><dt>上传时间</dt><dd>${esc(formatGalleryDate(asset.uploadedAt))}</dd></div><div><dt>最后更新</dt><dd>${esc(formatGalleryDate(asset.updatedAt))}</dd></div></dl><div class="gallery-card-actions" aria-label="${esc(asset.name)}的操作"><button type="button" class="btn" onclick="copyPriceGalleryAsset(this.closest('.gallery-card').dataset.assetId)">复制</button><button type="button" class="btn" onclick="downloadPriceGalleryAsset(this.closest('.gallery-card').dataset.assetId)">下载</button><button type="button" class="btn" disabled title="后续阶段开放">编辑</button><details class="gallery-more" ontoggle="handleGalleryMenuToggle(this)"><summary>更多</summary><div class="gallery-more-menu"><button type="button" disabled>替换图片 · 后续阶段开放</button><button type="button" disabled>移入历史版本 · 后续阶段开放</button><button type="button" disabled>删除 · 后续阶段开放</button></div></details></div></div></article>`;
+        return `<article class="gallery-card" data-asset-id="${esc(asset.assetId)}">${dragHandle}<div class="gallery-thumb">${imageHtml}</div><div class="gallery-card-body"><div class="gallery-card-tags"><span class="gallery-status ${asset.status}">${statusLabel}</span><span class="gallery-product">${esc(asset.product)}</span></div><h2>${esc(asset.name)}</h2><p class="gallery-note">${esc(note)}</p><dl class="gallery-dates"><div><dt>上传时间</dt><dd>${esc(formatGalleryDate(asset.uploadedAt))}</dd></div><div><dt>最后更新</dt><dd>${esc(formatGalleryDate(asset.updatedAt))}</dd></div></dl><div class="gallery-card-actions" aria-label="${esc(asset.name)}的操作"><button type="button" class="btn" onclick="copyPriceGalleryAsset(this.closest('.gallery-card').dataset.assetId)">复制</button><button type="button" class="btn" onclick="downloadPriceGalleryAsset(this.closest('.gallery-card').dataset.assetId)">下载</button><button type="button" class="btn" onclick="openPriceGalleryEdit(this.closest('.gallery-card').dataset.assetId)">编辑</button><details class="gallery-more" ontoggle="handleGalleryMenuToggle(this)"><summary>更多</summary><div class="gallery-more-menu"><button type="button" disabled>替换图片 · 后续阶段开放</button><button type="button" onclick="togglePriceGalleryAssetStatus(this.closest('.gallery-card').dataset.assetId)">${statusAction}</button><button type="button" disabled>删除 · 后续阶段开放</button></div></details></div></div></article>`;
       }
       function renderPriceGalleryResults() {
         if (mode !== "gallery") return;
+        finishGalleryAssetDrag(null, false);
         closeGalleryMenus();
         clearGalleryThumbnailUrls();
         const token = galleryThumbnailRenderToken;
@@ -3267,6 +3720,8 @@ const KEY = "zy_kb_system_v2",
           closeGalleryMenus();
           clearGalleryThumbnailUrls();
           closeGalleryUploadDialog(true);
+          closeGalleryEditDialog(true);
+          finishGalleryAssetDrag(null, false);
         }
         mode = m;
         document
@@ -3519,6 +3974,8 @@ const KEY = "zy_kb_system_v2",
           closeImageViewer();
           closeGalleryMenus();
           closeGalleryUploadDialog();
+          closeGalleryEditDialog();
+          finishGalleryAssetDrag(null, false);
           closeMoveDialog();
         }
       });
@@ -3531,11 +3988,20 @@ const KEY = "zy_kb_system_v2",
       document.addEventListener("pointermove", handleCategoryPointerMove, {
         passive: false,
       });
+      document.addEventListener("pointermove", handleGalleryAssetPointerMove, {
+        passive: false,
+      });
       document.addEventListener("pointerup", (event) =>
         finishCategoryDrag(event),
       );
+      document.addEventListener("pointerup", (event) =>
+        finishGalleryAssetDrag(event),
+      );
       document.addEventListener("pointercancel", (event) =>
         finishCategoryDrag(event, false),
+      );
+      document.addEventListener("pointercancel", (event) =>
+        finishGalleryAssetDrag(event, false),
       );
       $(".main")?.addEventListener("scroll", () => {
         const openMenu = document.querySelector(".gallery-more[open]");
