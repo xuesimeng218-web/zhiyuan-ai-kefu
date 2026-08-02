@@ -1073,6 +1073,13 @@
         background: #f0f1f4;
         color: #687085;
       }
+      .gallery-status.deleted {
+        background: #fff0f0;
+        color: #b3261e;
+      }
+      .gallery-card.is-deleted {
+        border-color: rgba(179, 38, 30, 0.22);
+      }
       .gallery-product {
         overflow: hidden;
         background: var(--soft);
@@ -1190,6 +1197,14 @@
         cursor: not-allowed;
         opacity: 0.65;
       }
+      .gallery-more-menu button.danger {
+        color: #b3261e;
+      }
+      .gallery-more-menu button.danger:hover,
+      .gallery-more-menu button.danger:focus-visible {
+        background: #fff0f0;
+        color: #8f1f19;
+      }
       .gallery-empty {
         display: grid;
         min-height: 240px;
@@ -1205,7 +1220,9 @@
         color: var(--ink);
       }
       body.uploading-gallery-image,
-      body.editing-gallery-asset {
+      body.editing-gallery-asset,
+      body.replacing-gallery-image,
+      body.viewing-gallery-versions {
         overflow: hidden;
       }
       .gallery-upload-backdrop {
@@ -1292,6 +1309,119 @@
       }
       .gallery-edit-preview {
         min-height: 320px;
+      }
+      .gallery-replace-copy {
+        display: grid;
+        gap: 4px;
+        margin-top: 16px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        background: #f7f7fb;
+      }
+      .gallery-replace-copy span,
+      .gallery-version-summary {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      .gallery-replace-preview {
+        min-height: 360px;
+        margin-top: 14px;
+      }
+      .gallery-version-dialog {
+        width: min(920px, 100%);
+        overflow: hidden;
+      }
+      .gallery-version-summary {
+        margin-top: 14px;
+      }
+      .gallery-version-list {
+        display: grid;
+        max-height: min(66vh, 680px);
+        gap: 12px;
+        margin-top: 14px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 2px 5px 2px 2px;
+      }
+      .gallery-version-item {
+        display: grid;
+        grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr);
+        gap: 14px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fff;
+      }
+      .gallery-version-item.is-current {
+        border-color: rgba(101, 83, 219, 0.3);
+        background: #faf9ff;
+      }
+      .gallery-version-thumb {
+        display: grid;
+        width: 100%;
+        min-height: 150px;
+        max-height: 230px;
+        place-items: center;
+        overflow: hidden;
+        border: 0;
+        border-radius: 10px;
+        background: #f5f6fa;
+        cursor: zoom-in;
+      }
+      .gallery-version-thumb img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      .gallery-version-missing {
+        color: var(--muted);
+        cursor: default;
+      }
+      .gallery-version-info {
+        min-width: 0;
+      }
+      .gallery-version-info > div:first-child {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .gallery-version-current {
+        border-radius: 999px;
+        padding: 3px 8px;
+        background: #e8f7f0;
+        color: #16734d;
+        font-size: 11px;
+      }
+      .gallery-version-info dl {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin: 12px 0;
+      }
+      .gallery-version-info dl div {
+        min-width: 0;
+        padding: 8px;
+        border-radius: 8px;
+        background: #f7f8fb;
+      }
+      .gallery-version-info dt {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .gallery-version-info dd {
+        margin: 3px 0 0;
+        overflow-wrap: anywhere;
+        font-size: 12px;
+      }
+      .gallery-version-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+      .gallery-version-actions .btn {
+        white-space: nowrap;
       }
       .gallery-upload-fields {
         display: grid;
@@ -1733,6 +1863,18 @@
         }
         .gallery-upload-preview img {
           max-height: 280px;
+        }
+        .gallery-version-dialog {
+          overflow: hidden;
+        }
+        .gallery-version-list {
+          max-height: 65vh;
+        }
+        .gallery-version-item {
+          grid-template-columns: 1fr;
+        }
+        .gallery-version-info dl {
+          grid-template-columns: 1fr;
         }
         .move-dialog-backdrop {
           align-items: end;
