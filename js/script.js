@@ -3,6 +3,7 @@ const KEY = "zy_kb_system_v2",
         RKEY = "zy_kb_recent_v2",
         IKEY = "zy_kb_article_images_v2",
         CATEGORY_ORDER_KEY = "zy_kb_category_order_v1",
+        CATEGORY_NAME_OVERRIDE_KEY = "zy_kb_category_name_overrides_v1",
         ARTICLE_ORDER_KEY = "zy_kb_article_order_v1",
         ARTICLE_CATEGORY_OVERRIDE_KEY = "zy_kb_article_category_overrides_v1",
         UI_STATE_KEY = "zy_kb_ui_state_v1",
@@ -28,6 +29,7 @@ const KEY = "zy_kb_system_v2",
         groups = mergeOriginalData(storedGroups);
       }
       hydrateGroups();
+      let categoryNameOverrides = loadCategoryNameOverrides();
       let categoryOrder = loadCategoryOrder();
       let articleCategoryOverrides = loadArticleCategoryOverrides();
       applyArticleCategoryOverrides();
@@ -99,6 +101,7 @@ const KEY = "zy_kb_system_v2",
       let articleDragState = null;
       let categoryScrollObserver = null;
       let moveDialogReturnFocus = null;
+      let categoryRenameReturnFocus = null;
       let latestMoveUndo = null;
       const $ = (s) => document.querySelector(s);
       save();
@@ -742,7 +745,10 @@ const KEY = "zy_kb_system_v2",
       function renderGroupList(gi) {
         const group = groups[gi];
         if (!group) return;
-        renderList(getOrderedArticleRecords(gi), group.title);
+        renderList(
+          getOrderedArticleRecords(gi),
+          getCategoryDisplayName(group, gi),
+        );
         if (!isProductCenterGroup(group) || $("#q").value.trim()) return;
         $("#items").innerHTML =
           renderGallerySystemEntry(gi) + $("#items").innerHTML;
@@ -4713,12 +4719,15 @@ const KEY = "zy_kb_system_v2",
         const backdrop = ensureMoveDialog();
         moveDialogReturnFocus = document.activeElement;
         $("#moveArticleTitle").textContent = article.title;
-        $("#moveCurrentCategory").textContent = sourceGroup.title;
+        $("#moveCurrentCategory").textContent = getCategoryDisplayName(
+          sourceGroup,
+          activeG,
+        );
         const select = $("#moveTargetCategory");
         select.innerHTML = `<option value="">请选择目标分类</option>${targetGroups
           .map(
             (gi) =>
-              `<option value="${esc(getCategoryOrderId(groups[gi], gi))}">${esc(groups[gi].title)}</option>`,
+              `<option value="${esc(getCategoryOrderId(groups[gi], gi))}">${esc(getCategoryDisplayName(groups[gi], gi))}</option>`,
           )
           .join("")}`;
         backdrop.dataset.contentId = contentId;
@@ -4829,8 +4838,13 @@ const KEY = "zy_kb_system_v2",
           toast("移动失败，文章或目标分类不存在");
           return;
         }
-        const sourceTitle = groups[current.gi]?.title || "原分类";
-        const targetTitle = groups[targetIndex].title;
+        const sourceTitle = groups[current.gi]
+          ? getCategoryDisplayName(groups[current.gi], current.gi)
+          : "原分类";
+        const targetTitle = getCategoryDisplayName(
+          groups[targetIndex],
+          targetIndex,
+        );
         closeMoveDialog();
         renderMovedArticle(targetIndex);
         showMoveSuccessToast(targetTitle, {
@@ -4935,6 +4949,202 @@ const KEY = "zy_kb_system_v2",
       }
       function getCategoryOrderId(group, index) {
         return String(group?.category_id || `group_${index}`);
+      }
+      function loadCategoryNameOverrides() {
+        try {
+          const parsed = JSON.parse(
+            localStorage.getItem(CATEGORY_NAME_OVERRIDE_KEY) || "{}",
+          );
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return {};
+          }
+          const normalized = {};
+          Object.entries(parsed).forEach(([rawCategoryId, rawName]) => {
+            const categoryId = String(rawCategoryId || "").trim();
+            const name = typeof rawName === "string" ? rawName.trim() : "";
+            if (categoryId && name) normalized[categoryId] = name;
+          });
+          return normalized;
+        } catch (error) {
+          return {};
+        }
+      }
+      function getCategoryDisplayName(group, index) {
+        const categoryId = getCategoryOrderId(group, index);
+        return (
+          categoryNameOverrides[categoryId] ||
+          String(group?.title || "未命名分类")
+        );
+      }
+      function persistCategoryNameOverrides(nextOverrides) {
+        try {
+          localStorage.setItem(
+            CATEGORY_NAME_OVERRIDE_KEY,
+            JSON.stringify(nextOverrides),
+          );
+          categoryNameOverrides = nextOverrides;
+          return true;
+        } catch (error) {
+          toast("分类名称保存失败");
+          return false;
+        }
+      }
+      function findCategoryIndexByDisplayName(name, excludedCategoryId = "") {
+        return groups.findIndex((group, gi) => {
+          const categoryId = getCategoryOrderId(group, gi);
+          return (
+            categoryId !== excludedCategoryId &&
+            getCategoryDisplayName(group, gi) === name
+          );
+        });
+      }
+      function ensureCategoryRenameDialog() {
+        let backdrop = $("#categoryRenameDialog");
+        if (backdrop) return backdrop;
+        backdrop = document.createElement("div");
+        backdrop.id = "categoryRenameDialog";
+        backdrop.className = "move-dialog-backdrop category-rename-backdrop";
+        backdrop.hidden = true;
+        backdrop.setAttribute("aria-hidden", "true");
+        backdrop.innerHTML = `<section class="move-dialog category-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="categoryRenameTitle"><header><h2 id="categoryRenameTitle">重命名分类</h2><button type="button" class="move-dialog-close" aria-label="关闭重命名分类窗口" title="关闭" onclick="closeCategoryRenameDialog()">×</button></header><div class="move-dialog-summary"><span>当前分类名称</span><strong id="categoryRenameCurrentName"></strong></div><label class="move-dialog-field"><span>新分类名称</span><input id="categoryRenameInput" type="text" maxlength="80" autocomplete="off" aria-describedby="categoryRenameError" oninput="updateCategoryRenameConfirm()" onkeydown="handleCategoryRenameKeydown(event)"></label><p class="category-rename-error" id="categoryRenameError" role="alert" aria-live="polite"></p><footer><button type="button" class="btn" onclick="closeCategoryRenameDialog()">取消</button><button type="button" class="btn primary" id="confirmCategoryRename" onclick="confirmCategoryRename()">确认修改</button></footer></section>`;
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) closeCategoryRenameDialog();
+        });
+        document.body.appendChild(backdrop);
+        return backdrop;
+      }
+      function openCategoryRenameDialog(groupIndex) {
+        const group = groups[groupIndex];
+        if (!group) return;
+        finishCategoryDrag(null, false);
+        const backdrop = ensureCategoryRenameDialog();
+        const categoryId = getCategoryOrderId(group, groupIndex);
+        const currentName = getCategoryDisplayName(group, groupIndex);
+        categoryRenameReturnFocus = document.activeElement;
+        backdrop.dataset.categoryId = categoryId;
+        $("#categoryRenameCurrentName").textContent = currentName;
+        $("#categoryRenameInput").value = currentName;
+        $("#categoryRenameError").textContent = "";
+        backdrop.hidden = false;
+        backdrop.setAttribute("aria-hidden", "false");
+        document.body.classList.add("renaming-category");
+        updateCategoryRenameConfirm();
+        requestAnimationFrame(() => $("#categoryRenameInput")?.select());
+      }
+      function getCategoryRenameValidation() {
+        const backdrop = $("#categoryRenameDialog");
+        const input = $("#categoryRenameInput");
+        const categoryId = String(backdrop?.dataset.categoryId || "");
+        const groupIndex = findGroupIndexByCategoryId(categoryId);
+        const name = String(input?.value || "").trim();
+        if (!backdrop || backdrop.hidden || groupIndex < 0) {
+          return { valid: false, categoryId, groupIndex, name, message: "" };
+        }
+        if (!name) {
+          return {
+            valid: false,
+            categoryId,
+            groupIndex,
+            name,
+            message: "分类名称不能为空",
+          };
+        }
+        if (findCategoryIndexByDisplayName(name, categoryId) >= 0) {
+          return {
+            valid: false,
+            categoryId,
+            groupIndex,
+            name,
+            message: "分类名称已存在",
+          };
+        }
+        const currentName = getCategoryDisplayName(
+          groups[groupIndex],
+          groupIndex,
+        );
+        return {
+          valid: name !== currentName,
+          categoryId,
+          groupIndex,
+          name,
+          message: "",
+        };
+      }
+      function updateCategoryRenameConfirm() {
+        const validation = getCategoryRenameValidation();
+        const error = $("#categoryRenameError");
+        const confirmButton = $("#confirmCategoryRename");
+        if (error) error.textContent = validation.message;
+        if (confirmButton) confirmButton.disabled = !validation.valid;
+      }
+      function handleCategoryRenameKeydown(event) {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        confirmCategoryRename();
+      }
+      function closeCategoryRenameDialog() {
+        const backdrop = $("#categoryRenameDialog");
+        if (!backdrop || backdrop.hidden) return;
+        backdrop.hidden = true;
+        backdrop.setAttribute("aria-hidden", "true");
+        delete backdrop.dataset.categoryId;
+        document.body.classList.remove("renaming-category");
+        const returnFocus = categoryRenameReturnFocus;
+        categoryRenameReturnFocus = null;
+        returnFocus?.focus?.();
+      }
+      function refreshActiveArticleCategoryLabel() {
+        const crumb = $("#main .crumb");
+        const group = groups[activeG];
+        if (!crumb || !group || !activeArticleVisible) return;
+        crumb.textContent = `${getCategoryDisplayName(group, activeG)} / ${
+          editing ? "编辑内容" : "查看内容"
+        }`;
+      }
+      function refreshCategoryNameDisplays() {
+        renderNav(
+          mode === "group" || mode === "gallery" ? activeG : null,
+        );
+        if (mode === "group") {
+          renderGroupList(activeG);
+          refreshActiveArticleCategoryLabel();
+        } else if (mode === "gallery") {
+          renderGroupList(activeG);
+        } else if (mode === "fav") {
+          renderList(
+            favs.map((key) => resolveStoredIdRecord(key)).filter(Boolean),
+            "我的收藏",
+          );
+        } else if (mode === "recent") {
+          renderList(
+            recent.map((key) => resolveStoredIdRecord(key)).filter(Boolean),
+            "最近使用",
+          );
+        } else {
+          renderList(
+            recent
+              .slice(0, 6)
+              .map((key) => resolveStoredIdRecord(key))
+              .filter(Boolean),
+            "最近使用",
+          );
+        }
+      }
+      function confirmCategoryRename() {
+        const validation = getCategoryRenameValidation();
+        updateCategoryRenameConfirm();
+        if (!validation.valid) return;
+        const group = groups[validation.groupIndex];
+        const nextOverrides = { ...categoryNameOverrides };
+        if (validation.name === String(group.title || "").trim()) {
+          delete nextOverrides[validation.categoryId];
+        } else {
+          nextOverrides[validation.categoryId] = validation.name;
+        }
+        if (!persistCategoryNameOverrides(nextOverrides)) return;
+        closeCategoryRenameDialog();
+        refreshCategoryNameDisplays();
+        toast("分类名称已更新");
       }
       function normalizeArticleOrderIds(values) {
         if (!Array.isArray(values)) return [];
@@ -5839,9 +6049,10 @@ const KEY = "zy_kb_system_v2",
         $("#cats").innerHTML = getOrderedGroupIndexes()
           .map((gi) => {
             const g = groups[gi];
+            const displayName = getCategoryDisplayName(g, gi);
             total += g.items.length;
-            const label = `拖动调整“${g.title}”分类顺序`;
-            return `<div class="category-row" data-group-index="${gi}" data-category-id="${esc(getCategoryOrderId(g, gi))}"><button type="button" class="navbtn category-open ${(mode === "group" || mode === "gallery") && gi === activeG ? "on" : ""}" onclick="openGroup(${gi})"><span class="category-name">📁 ${esc(g.title)}</span><em>${g.items.length}</em></button><button type="button" class="category-drag-handle" aria-label="${esc(label)}" title="拖动调整分类顺序" aria-grabbed="false" onpointerdown="startCategoryDrag(event,${gi})" onkeydown="handleCategoryHandleKeydown(event,${gi})" onclick="event.preventDefault();event.stopPropagation()">⠿</button></div>`;
+            const label = `拖动调整“${displayName}”分类顺序`;
+            return `<div class="category-row" data-group-index="${gi}" data-category-id="${esc(getCategoryOrderId(g, gi))}"><button type="button" class="navbtn category-open ${(mode === "group" || mode === "gallery") && gi === activeG ? "on" : ""}" onclick="openGroup(${gi})"><span class="category-name" title="${esc(displayName)}">📁 ${esc(displayName)}</span><em>${g.items.length}</em></button><button type="button" class="category-manage-button" aria-label="重命名分类：${esc(displayName)}" title="重命名分类" onclick="event.preventDefault();event.stopPropagation();openCategoryRenameDialog(${gi})">✎</button><button type="button" class="category-drag-handle" aria-label="${esc(label)}" title="拖动调整分类顺序" aria-grabbed="false" onpointerdown="startCategoryDrag(event,${gi})" onkeydown="handleCategoryHandleKeydown(event,${gi})" onclick="event.preventDefault();event.stopPropagation()">⠿</button></div>`;
           })
           .join("");
         $("#favCount").textContent = favs.length;
@@ -5930,7 +6141,7 @@ const KEY = "zy_kb_system_v2",
             ? `<div class="markdown-body">${renderMarkdown(text, x.title)}</div>`
             : `<div class="readview">${esc(text)}</div>`;
         $("#main").innerHTML =
-          `<div class="topbar"><div class="crumb">${esc(groups[activeG].title)} / ${editing ? "编辑内容" : "查看内容"}</div><div class="tools"><button class="btn" onclick="toggleFav(${activeG},${activeI})">${favs.includes(getContentId(activeG, activeI)) ? "★ 已收藏" : "☆ 收藏"}</button><button class="btn" onclick="copyCurrent()">复制</button><button class="btn" onclick="openMoveDialog()" ${editing ? 'disabled title="请先完成编辑再移动"' : ""}>移动</button><button class="btn primary" onclick="toggleEdit()">${editing ? "完成编辑" : "编辑"}</button><button class="btn danger" onclick="deleteCurrent()">删除</button></div></div><div class="paper">${editing ? `<div class="article-editor"><input class="titleinput" id="titleEdit" value="${esc(x.title)}"><textarea class="contentarea" id="bodyEdit">${esc(text)}</textarea>${renderImageManager(activeG, activeI)}</div>` : `<h1 style="margin:0;border-bottom:1px solid var(--line);padding-bottom:12px">${esc(x.title)}</h1>${images}${body}`}</div>`;
+          `<div class="topbar"><div class="crumb">${esc(getCategoryDisplayName(groups[activeG], activeG))} / ${editing ? "编辑内容" : "查看内容"}</div><div class="tools"><button class="btn" onclick="toggleFav(${activeG},${activeI})">${favs.includes(getContentId(activeG, activeI)) ? "★ 已收藏" : "☆ 收藏"}</button><button class="btn" onclick="copyCurrent()">复制</button><button class="btn" onclick="openMoveDialog()" ${editing ? 'disabled title="请先完成编辑再移动"' : ""}>移动</button><button class="btn primary" onclick="toggleEdit()">${editing ? "完成编辑" : "编辑"}</button><button class="btn danger" onclick="deleteCurrent()">删除</button></div></div><div class="paper">${editing ? `<div class="article-editor"><input class="titleinput" id="titleEdit" value="${esc(x.title)}"><textarea class="contentarea" id="bodyEdit">${esc(text)}</textarea>${renderImageManager(activeG, activeI)}</div>` : `<h1 style="margin:0;border-bottom:1px solid var(--line);padding-bottom:12px">${esc(x.title)}</h1>${images}${body}`}</div>`;
       }
       function toggleEdit() {
         if (editing) {
@@ -6135,6 +6346,7 @@ const KEY = "zy_kb_system_v2",
           finishGalleryAssetDrag(null, false);
           finishArticleDrag(null, false);
           closeMoveDialog();
+          closeCategoryRenameDialog();
         }
       });
       document.addEventListener("paste", handlePriceGalleryPaste);
