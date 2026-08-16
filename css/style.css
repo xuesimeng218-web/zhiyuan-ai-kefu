@@ -1262,7 +1262,9 @@
       body.uploading-gallery-image,
       body.editing-gallery-asset,
       body.replacing-gallery-image,
-      body.viewing-gallery-versions {
+      body.viewing-gallery-versions,
+      body.managing-product-add,
+      body.creating-gallery-collection {
         overflow: hidden;
       }
       .gallery-upload-backdrop {
@@ -1304,6 +1306,60 @@
       .gallery-upload-dialog h2 {
         margin: 0;
         font-size: 22px;
+      }
+      .product-add-dialog,
+      .gallery-create-dialog {
+        width: min(540px, 100%);
+      }
+      .product-add-options {
+        display: grid;
+        gap: 12px;
+        margin: 20px 0;
+      }
+      .product-add-option {
+        display: grid;
+        gap: 5px;
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        background: #faf9fd;
+        color: var(--ink);
+        padding: 16px;
+        cursor: pointer;
+        text-align: left;
+      }
+      .product-add-option:hover,
+      .product-add-option:focus-visible {
+        border-color: var(--brand);
+        outline: none;
+        background: #f3efff;
+      }
+      .product-add-option b {
+        font-size: 15px;
+      }
+      .product-add-option span {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      .gallery-create-fields {
+        margin-top: 20px;
+      }
+      .gallery-create-fields label > span em {
+        color: var(--muted);
+        font-size: 11px;
+        font-style: normal;
+        font-weight: 600;
+      }
+      .gallery-create-error {
+        min-height: 20px;
+        margin: -3px 0 0;
+        color: #b42318;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .gallery-create-fields input[aria-invalid="true"] {
+        border-color: #d92d20;
       }
       .gallery-upload-close {
         display: grid;

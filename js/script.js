@@ -8,8 +8,9 @@ const KEY = "zy_kb_system_v2",
         ARTICLE_CATEGORY_OVERRIDE_KEY = "zy_kb_article_category_overrides_v1",
         UI_STATE_KEY = "zy_kb_ui_state_v1",
         PRICE_GALLERY_META_KEY = "zy_kb_price_gallery_meta_v1",
+        GALLERY_COLLECTIONS_KEY = "zy_kb_gallery_collections_v1",
         PRICE_GALLERY_DB_NAME = "zy_kb_price_gallery_db",
-        PRICE_GALLERY_DB_VERSION = 2,
+        PRICE_GALLERY_DB_VERSION = 3,
         PRICE_GALLERY_IMAGE_STORE = "images",
         PRICE_GALLERY_THUMBNAIL_STORE = "thumbnails",
         PRICE_GALLERY_VERSION_STORE = "versions",
@@ -59,10 +60,14 @@ const KEY = "zy_kb_system_v2",
         "Perplexity",
         "其他产品",
       ];
-      const PRICE_GALLERY_ENTRY_ID = "price-gallery";
+      const DEFAULT_GALLERY_ID = "gallery_default_price";
+      const DEFAULT_GALLERY_NAME = "价格图素材库";
+      const DEFAULT_GALLERY_DESCRIPTION =
+        "集中管理 ChatGPT、Claude、Gemini、Grok、Cursor、Perplexity 等产品价格图";
+      const PRICE_GALLERY_ENTRY_ID = "gallery";
       const PRICE_GALLERY_BACKUP_TYPE = "zy-kb-price-gallery-backup";
-      const PRICE_GALLERY_BACKUP_SCHEMA_VERSION = 2;
-      const PRICE_GALLERY_BACKUP_SUPPORTED_VERSIONS = new Set([1, 2]);
+      const PRICE_GALLERY_BACKUP_SCHEMA_VERSION = 3;
+      const PRICE_GALLERY_BACKUP_SUPPORTED_VERSIONS = new Set([1, 2, 3]);
       const PRICE_GALLERY_BACKUP_MAX_BYTES = 256 * 1024 * 1024;
       const PRICE_GALLERY_LIMITS = Object.freeze({
         maxOriginalBytes: 20 * 1024 * 1024,
@@ -76,6 +81,10 @@ const KEY = "zy_kb_system_v2",
         "image/png",
         "image/webp",
       ]);
+      let galleryCollectionsLoadError = false;
+      let galleryCollectionsLoadErrorNotified = false;
+      let galleryCollections = loadGalleryCollections();
+      let activeGalleryId = DEFAULT_GALLERY_ID;
       let galleryMetaLoadError = false;
       let priceGalleryMeta = loadPriceGalleryMeta();
       let priceGalleryDbPromise = null;
@@ -102,6 +111,8 @@ const KEY = "zy_kb_system_v2",
       let categoryScrollObserver = null;
       let moveDialogReturnFocus = null;
       let categoryRenameReturnFocus = null;
+      let productAddDialogReturnFocus = null;
+      let galleryCreateDialogReturnFocus = null;
       let latestMoveUndo = null;
       const $ = (s) => document.querySelector(s);
       save();
@@ -738,9 +749,178 @@ const KEY = "zy_kb_system_v2",
       function isProductCenterGroup(group) {
         return String(group?.category_id || "").trim() === "products";
       }
-      function renderGallerySystemEntry(gi) {
-        const activeClass = mode === "gallery" ? "on" : "";
-        return `<button type="button" class="docitem gallery-system-entry ${activeClass}" data-system-entry="${PRICE_GALLERY_ENTRY_ID}" onclick="openPriceGallery(${gi})"><b>价格图素材库 <span>图库</span></b><small>集中管理 ChatGPT、Claude、Gemini、Grok、Cursor、Perplexity 等产品价格图</small></button>`;
+      function createDefaultGalleryCollection(
+        createdAt = new Date().toISOString(),
+      ) {
+        return {
+          gallery_id: DEFAULT_GALLERY_ID,
+          name: DEFAULT_GALLERY_NAME,
+          description: DEFAULT_GALLERY_DESCRIPTION,
+          category_id: "products",
+          sort_order: 0,
+          created_at: createdAt,
+          updated_at: createdAt,
+          is_default: true,
+        };
+      }
+      function isValidGalleryDate(value) {
+        return (
+          typeof value === "string" &&
+          value.length > 0 &&
+          Number.isFinite(new Date(value).getTime())
+        );
+      }
+      function sanitizeGalleryCollection(raw, index = 0) {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+        const galleryId = String(raw.gallery_id || raw.galleryId || "").trim();
+        const name = String(raw.name || "").trim();
+        const description = String(raw.description || "").trim();
+        const categoryId = String(
+          raw.category_id || raw.categoryId || "products",
+        ).trim();
+        const createdAt = String(raw.created_at || raw.createdAt || "");
+        const updatedAt = String(raw.updated_at || raw.updatedAt || createdAt);
+        if (
+          !/^[A-Za-z0-9_-]{1,120}$/.test(galleryId) ||
+          !name ||
+          name.length > 80 ||
+          description.length > 500 ||
+          categoryId !== "products" ||
+          !isValidGalleryDate(createdAt) ||
+          !isValidGalleryDate(updatedAt)
+        ) {
+          return null;
+        }
+        const sortOrder = Number(raw.sort_order ?? raw.sortOrder);
+        return {
+          gallery_id: galleryId,
+          name,
+          description,
+          category_id: categoryId,
+          sort_order:
+            Number.isFinite(sortOrder) && sortOrder >= 0 ? sortOrder : index,
+          created_at: createdAt,
+          updated_at: updatedAt,
+          is_default: galleryId === DEFAULT_GALLERY_ID,
+        };
+      }
+      function normalizeGalleryCollections(rawCollections) {
+        if (!Array.isArray(rawCollections)) {
+          throw new Error("invalid gallery collections");
+        }
+        const seenIds = new Set();
+        const seenNames = new Set();
+        const normalized = rawCollections.map((raw, index) => {
+          const collection = sanitizeGalleryCollection(raw, index);
+          const nameKey = collection?.name.toLocaleLowerCase("zh-CN");
+          if (
+            !collection ||
+            seenIds.has(collection.gallery_id) ||
+            seenNames.has(nameKey)
+          ) {
+            throw new Error("invalid gallery collection entry");
+          }
+          seenIds.add(collection.gallery_id);
+          seenNames.add(nameKey);
+          return collection;
+        });
+        if (!seenIds.has(DEFAULT_GALLERY_ID)) {
+          const defaultCollection = createDefaultGalleryCollection();
+          if (
+            seenNames.has(defaultCollection.name.toLocaleLowerCase("zh-CN"))
+          ) {
+            throw new Error("default gallery collection conflict");
+          }
+          normalized.unshift(defaultCollection);
+        }
+        return normalized;
+      }
+      function loadGalleryCollections() {
+        const raw = localStorage.getItem(GALLERY_COLLECTIONS_KEY);
+        if (raw === null) {
+          const initial = [createDefaultGalleryCollection()];
+          try {
+            localStorage.setItem(GALLERY_COLLECTIONS_KEY, JSON.stringify(initial));
+          } catch (error) {
+            galleryCollectionsLoadError = true;
+          }
+          return initial;
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          const normalized = normalizeGalleryCollections(parsed);
+          if (!parsed.some((item) => item?.gallery_id === DEFAULT_GALLERY_ID)) {
+            try {
+              localStorage.setItem(
+                GALLERY_COLLECTIONS_KEY,
+                JSON.stringify(normalized),
+              );
+            } catch (error) {
+              galleryCollectionsLoadError = true;
+            }
+          }
+          return normalized;
+        } catch (error) {
+          galleryCollectionsLoadError = true;
+          return [createDefaultGalleryCollection()];
+        }
+      }
+      function persistGalleryCollections(nextCollections) {
+        let normalized;
+        try {
+          normalized = normalizeGalleryCollections(nextCollections);
+        } catch (error) {
+          throw createGalleryError("COLLECTION_META_INVALID", error);
+        }
+        try {
+          localStorage.setItem(GALLERY_COLLECTIONS_KEY, JSON.stringify(normalized));
+          galleryCollections = normalized;
+          galleryCollectionsLoadError = false;
+          return true;
+        } catch (error) {
+          throw createGalleryError(
+            galleryErrorCode(error, "COLLECTION_META_SAVE_FAILED") === "STORAGE_FULL"
+              ? "STORAGE_FULL"
+              : "COLLECTION_META_SAVE_FAILED",
+            error,
+          );
+        }
+      }
+      function notifyGalleryCollectionsLoadError() {
+        if (!galleryCollectionsLoadError || galleryCollectionsLoadErrorNotified) {
+          return;
+        }
+        galleryCollectionsLoadErrorNotified = true;
+        alert(
+          "素材库元数据读取失败。为避免覆盖现有记录，已停止素材库写入；默认价格图库仍可尝试打开，请先备份并检查浏览器数据。",
+        );
+      }
+      function ensureGalleryCollectionsWritable() {
+        if (!galleryCollectionsLoadError) return true;
+        notifyGalleryCollectionsLoadError();
+        return false;
+      }
+      function getGalleryCollection(galleryId = activeGalleryId) {
+        return (
+          galleryCollections.find((item) => item.gallery_id === galleryId) || null
+        );
+      }
+      function getGalleryCollectionsForCategory(categoryId) {
+        return galleryCollections
+          .filter((item) => item.category_id === categoryId)
+          .sort(
+            (a, b) =>
+              a.sort_order - b.sort_order ||
+              galleryTimestamp(a.created_at) - galleryTimestamp(b.created_at) ||
+              a.gallery_id.localeCompare(b.gallery_id),
+          );
+      }
+      function renderGallerySystemEntry(gi, collection) {
+        const activeClass =
+          mode === "gallery" && activeGalleryId === collection.gallery_id
+            ? "on"
+            : "";
+        return `<button type="button" class="docitem gallery-system-entry ${activeClass}" data-system-entry="${PRICE_GALLERY_ENTRY_ID}" data-gallery-id="${esc(collection.gallery_id)}" onclick="openPriceGallery(${gi},'${collection.gallery_id}')"><b>${esc(collection.name)} <span>图库</span></b><small>${esc(collection.description || "独立管理当前素材库中的图片")}</small></button>`;
       }
       function renderGroupList(gi) {
         const group = groups[gi];
@@ -750,8 +930,11 @@ const KEY = "zy_kb_system_v2",
           getCategoryDisplayName(group, gi),
         );
         if (!isProductCenterGroup(group) || $("#q").value.trim()) return;
-        $("#items").innerHTML =
-          renderGallerySystemEntry(gi) + $("#items").innerHTML;
+        notifyGalleryCollectionsLoadError();
+        const entries = getGalleryCollectionsForCategory("products")
+          .map((collection) => renderGallerySystemEntry(gi, collection))
+          .join("");
+        $("#items").innerHTML = entries + $("#items").innerHTML;
       }
       function createGalleryError(code, cause = null) {
         const error = new Error(code);
@@ -792,6 +975,9 @@ const KEY = "zy_kb_system_v2",
             "浏览器存储空间不足，请释放本机浏览器空间后重试。",
           META_SAVE_FAILED:
             "价格图元数据保存失败，现有数据保持不变，请重试。",
+          COLLECTION_META_INVALID: "素材库元数据不完整，未保存本次修改。",
+          COLLECTION_META_SAVE_FAILED:
+            "素材库元数据保存失败，现有数据保持不变，请重试。",
           NO_CLIPBOARD_IMAGE: "剪贴板中未检测到图片。",
           CLIPBOARD_UNSUPPORTED:
             "当前浏览器不支持复制图片，请使用下载功能。",
@@ -818,8 +1004,13 @@ const KEY = "zy_kb_system_v2",
           const parsed = Number(value);
           return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
         };
+        const galleryId = String(
+          raw.gallery_id || raw.galleryId || DEFAULT_GALLERY_ID,
+        ).trim();
+        if (!/^[A-Za-z0-9_-]{1,120}$/.test(galleryId)) return null;
         return {
           assetId,
+          gallery_id: galleryId,
           name: String(raw.name || "未命名价格图").trim() || "未命名价格图",
           productCategory,
           note: String(raw.note || ""),
@@ -863,9 +1054,18 @@ const KEY = "zy_kb_system_v2",
         }
       }
       function persistPriceGalleryMeta(nextMeta) {
-        const normalized = nextMeta
-          .map(sanitizeGalleryMeta)
-          .filter(Boolean);
+        const normalized = nextMeta.map(sanitizeGalleryMeta);
+        const collectionIds = new Set(
+          galleryCollections.map((collection) => collection.gallery_id),
+        );
+        if (
+          normalized.some((asset) => !asset) ||
+          new Set(normalized.map((asset) => asset.assetId)).size !==
+            normalized.length ||
+          normalized.some((asset) => !collectionIds.has(asset.gallery_id))
+        ) {
+          throw createGalleryError("META_SAVE_FAILED");
+        }
         try {
           localStorage.setItem(
             PRICE_GALLERY_META_KEY,
@@ -908,25 +1108,44 @@ const KEY = "zy_kb_system_v2",
           }
           request.onupgradeneeded = () => {
             const db = request.result;
+            const upgradeTransaction = request.transaction;
+            const stores = [];
             if (!db.objectStoreNames.contains(PRICE_GALLERY_IMAGE_STORE)) {
-              db.createObjectStore(PRICE_GALLERY_IMAGE_STORE, {
-                keyPath: "assetId",
-              });
+              stores.push(
+                db.createObjectStore(PRICE_GALLERY_IMAGE_STORE, {
+                  keyPath: "assetId",
+                }),
+              );
+            } else {
+              stores.push(
+                upgradeTransaction.objectStore(PRICE_GALLERY_IMAGE_STORE),
+              );
             }
             if (
               !db.objectStoreNames.contains(
                 PRICE_GALLERY_THUMBNAIL_STORE,
               )
             ) {
-              db.createObjectStore(PRICE_GALLERY_THUMBNAIL_STORE, {
-                keyPath: "assetId",
-              });
+              stores.push(
+                db.createObjectStore(PRICE_GALLERY_THUMBNAIL_STORE, {
+                  keyPath: "assetId",
+                }),
+              );
+            } else {
+              stores.push(
+                upgradeTransaction.objectStore(PRICE_GALLERY_THUMBNAIL_STORE),
+              );
             }
             if (!db.objectStoreNames.contains(PRICE_GALLERY_VERSION_STORE)) {
               const store = db.createObjectStore(PRICE_GALLERY_VERSION_STORE, {
                 keyPath: "versionId",
               });
               store.createIndex("assetId", "assetId", { unique: false });
+              stores.push(store);
+            } else {
+              stores.push(
+                upgradeTransaction.objectStore(PRICE_GALLERY_VERSION_STORE),
+              );
             }
             if (
               !db.objectStoreNames.contains(
@@ -938,7 +1157,31 @@ const KEY = "zy_kb_system_v2",
                 { keyPath: "versionId" },
               );
               store.createIndex("assetId", "assetId", { unique: false });
+              stores.push(store);
+            } else {
+              stores.push(
+                upgradeTransaction.objectStore(
+                  PRICE_GALLERY_VERSION_THUMBNAIL_STORE,
+                ),
+              );
             }
+            stores.forEach((store) => {
+              if (!store.indexNames.contains("gallery_id")) {
+                store.createIndex("gallery_id", "gallery_id", { unique: false });
+              }
+              const cursorRequest = store.openCursor();
+              cursorRequest.onsuccess = () => {
+                const cursor = cursorRequest.result;
+                if (!cursor) return;
+                if (!String(cursor.value?.gallery_id || "").trim()) {
+                  cursor.update({
+                    ...cursor.value,
+                    gallery_id: DEFAULT_GALLERY_ID,
+                  });
+                }
+                cursor.continue();
+              };
+            });
           };
           request.onsuccess = () => {
             const db = request.result;
@@ -989,7 +1232,12 @@ const KEY = "zy_kb_system_v2",
             );
         });
       }
-      async function putPriceGalleryBlobs(assetId, full, thumbnail) {
+      async function putPriceGalleryBlobs(
+        assetId,
+        full,
+        thumbnail,
+        galleryId = activeGalleryId,
+      ) {
         const db = await openPriceGalleryDb();
         let transaction;
         try {
@@ -999,6 +1247,7 @@ const KEY = "zy_kb_system_v2",
           );
           transaction.objectStore(PRICE_GALLERY_IMAGE_STORE).put({
             assetId,
+            gallery_id: galleryId,
             blob: full.blob,
             width: full.width,
             height: full.height,
@@ -1007,6 +1256,7 @@ const KEY = "zy_kb_system_v2",
           });
           transaction.objectStore(PRICE_GALLERY_THUMBNAIL_STORE).put({
             assetId,
+            gallery_id: galleryId,
             blob: thumbnail.blob,
             width: thumbnail.width,
             height: thumbnail.height,
@@ -1048,12 +1298,20 @@ const KEY = "zy_kb_system_v2",
           .delete(assetId);
         await waitForGalleryTransaction(transaction);
       }
-      async function verifyPriceGalleryBlobs(assetId) {
+      async function verifyPriceGalleryBlobs(
+        assetId,
+        galleryId = activeGalleryId,
+      ) {
         const [full, thumbnail] = await Promise.all([
           getPriceGalleryBlobRecord(PRICE_GALLERY_IMAGE_STORE, assetId),
           getPriceGalleryBlobRecord(PRICE_GALLERY_THUMBNAIL_STORE, assetId),
         ]);
-        if (!(full?.blob instanceof Blob) || !(thumbnail?.blob instanceof Blob)) {
+        if (
+          !(full?.blob instanceof Blob) ||
+          !(thumbnail?.blob instanceof Blob) ||
+          full.gallery_id !== galleryId ||
+          thumbnail.gallery_id !== galleryId
+        ) {
           throw createGalleryError("IDB_UNAVAILABLE");
         }
       }
@@ -1073,6 +1331,8 @@ const KEY = "zy_kb_system_v2",
         return {
           versionId,
           assetId,
+          gallery_id:
+            String(metadata.gallery_id || currentRecord.gallery_id || DEFAULT_GALLERY_ID),
           blob: currentRecord.blob,
           width: currentRecord.width,
           height: currentRecord.height,
@@ -1084,7 +1344,10 @@ const KEY = "zy_kb_system_v2",
           originalSize: metadata.originalSize || 0,
         };
       }
-      async function getPriceGalleryVersions(assetId) {
+      async function getPriceGalleryVersions(
+        assetId,
+        galleryId = activeGalleryId,
+      ) {
         const db = await openPriceGalleryDb();
         try {
           const transaction = db.transaction(
@@ -1109,10 +1372,14 @@ const KEY = "zy_kb_system_v2",
             ),
           ]);
           const thumbnailById = new Map(
-            thumbnails.map((record) => [record.versionId, record]),
+            thumbnails
+              .filter((record) => record.gallery_id === galleryId)
+              .map((record) => [record.versionId, record]),
           );
           const imageById = new Map(
-            images.map((record) => [record.versionId, record]),
+            images
+              .filter((record) => record.gallery_id === galleryId)
+              .map((record) => [record.versionId, record]),
           );
           return [...new Set([...imageById.keys(), ...thumbnailById.keys()])]
             .map((versionId) => ({
@@ -1154,7 +1421,9 @@ const KEY = "zy_kb_system_v2",
         ]);
         if (
           !(oldImage?.blob instanceof Blob) ||
-          !(oldThumbnail?.blob instanceof Blob)
+          !(oldThumbnail?.blob instanceof Blob) ||
+          oldImage.gallery_id !== asset.gallery_id ||
+          oldThumbnail.gallery_id !== asset.gallery_id
         ) {
           throw createGalleryError("IMAGE_NOT_FOUND");
         }
@@ -1174,6 +1443,7 @@ const KEY = "zy_kb_system_v2",
         );
         const newImage = {
           assetId: asset.assetId,
+          gallery_id: asset.gallery_id,
           blob: processed.full.blob,
           width: processed.full.width,
           height: processed.full.height,
@@ -1182,6 +1452,7 @@ const KEY = "zy_kb_system_v2",
         };
         const newThumbnail = {
           assetId: asset.assetId,
+          gallery_id: asset.gallery_id,
           blob: processed.thumbnail.blob,
           width: processed.thumbnail.width,
           height: processed.thumbnail.height,
@@ -1250,7 +1521,7 @@ const KEY = "zy_kb_system_v2",
           .objectStore(PRICE_GALLERY_VERSION_THUMBNAIL_STORE)
           .delete(snapshot.oldVersionThumbnail.versionId);
         await waitForGalleryTransaction(transaction);
-        await verifyPriceGalleryBlobs(assetId);
+        await verifyPriceGalleryBlobs(assetId, snapshot.oldImage.gallery_id);
       }
       async function getPriceGalleryStoredIds() {
         const db = await openPriceGalleryDb();
@@ -1432,13 +1703,31 @@ const KEY = "zy_kb_system_v2",
         }).format(timestamp);
       }
       function getPriceGalleryAssets() {
-        return priceGalleryMeta.map((asset, sourceIndex) => ({
-          ...asset,
-          product: asset.productCategory,
-          uploadedAt: asset.createdAt,
-          sortOrder: asset.customOrder,
-          sourceIndex,
-        }));
+        return priceGalleryMeta
+          .filter((asset) => asset.gallery_id === activeGalleryId)
+          .map((asset, sourceIndex) => ({
+            ...asset,
+            product: asset.productCategory,
+            uploadedAt: asset.createdAt,
+            sortOrder: asset.customOrder,
+            sourceIndex,
+          }));
+      }
+      function findActiveGalleryAsset(assetId, predicate = () => true) {
+        return priceGalleryMeta.find(
+          (asset) =>
+            asset.assetId === assetId &&
+            asset.gallery_id === activeGalleryId &&
+            predicate(asset),
+        );
+      }
+      function findActiveGalleryAssetIndex(assetId, predicate = () => true) {
+        return priceGalleryMeta.findIndex(
+          (asset) =>
+            asset.assetId === assetId &&
+            asset.gallery_id === activeGalleryId &&
+            predicate(asset),
+        );
       }
       function getFilteredPriceGalleryAssets() {
         const query = galleryViewState.query.trim().toLowerCase();
@@ -1766,6 +2055,26 @@ const KEY = "zy_kb_system_v2",
         );
         return next;
       }
+      function applyDefaultGalleryOwnershipToLegacyMeta(parsed) {
+        let changed = false;
+        const next = parsed.map((raw) => {
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+          const hasLegacyImage =
+            getLegacyGalleryDataUrl(raw, LEGACY_GALLERY_FULL_FIELDS) ||
+            getLegacyGalleryDataUrl(raw, LEGACY_GALLERY_THUMB_FIELDS);
+          if (hasLegacyImage || String(raw.gallery_id || "").trim()) return raw;
+          changed = true;
+          return { ...raw, gallery_id: DEFAULT_GALLERY_ID };
+        });
+        if (!changed) return parsed;
+        try {
+          localStorage.setItem(PRICE_GALLERY_META_KEY, JSON.stringify(next));
+          return next;
+        } catch (error) {
+          console.info("价格图库归属兼容：存储空间不足，原元数据未修改。");
+          return parsed;
+        }
+      }
       async function runLegacyPriceGalleryMigration() {
         if (galleryLegacyMigrationStarted) return;
         galleryLegacyMigrationStarted = true;
@@ -1791,6 +2100,8 @@ const KEY = "zy_kb_system_v2",
           }))
           .filter((item) => item.full || item.thumbnail);
         if (!candidates.length) {
+          parsed = applyDefaultGalleryOwnershipToLegacyMeta(parsed);
+          priceGalleryMeta = loadPriceGalleryMeta();
           console.info("价格图库迁移：未检测到需要迁移的数据。");
           return;
         }
@@ -1811,7 +2122,10 @@ const KEY = "zy_kb_system_v2",
                 assetId,
               ),
             ]);
-            let metadata = sanitizeGalleryMeta(candidate.raw, candidate.index);
+            let metadata = {
+              ...sanitizeGalleryMeta(candidate.raw, candidate.index),
+              gallery_id: DEFAULT_GALLERY_ID,
+            };
             if (
               existingImage?.blob instanceof Blob &&
               existingThumbnail?.blob instanceof Blob
@@ -1845,9 +2159,14 @@ const KEY = "zy_kb_system_v2",
               { type: sourceBlob.type },
             );
             const processed = await processPriceGalleryFile(legacyFile);
-            await putPriceGalleryBlobs(assetId, processed.full, processed.thumbnail);
+            await putPriceGalleryBlobs(
+              assetId,
+              processed.full,
+              processed.thumbnail,
+              DEFAULT_GALLERY_ID,
+            );
             wroteBlobs = true;
-            await verifyPriceGalleryBlobs(assetId);
+            await verifyPriceGalleryBlobs(assetId, DEFAULT_GALLERY_ID);
             const now = new Date().toISOString();
             metadata = {
               ...metadata,
@@ -1884,6 +2203,7 @@ const KEY = "zy_kb_system_v2",
             failed += 1;
           }
         }
+        parsed = applyDefaultGalleryOwnershipToLegacyMeta(parsed);
         priceGalleryMeta = loadPriceGalleryMeta();
         const message = `价格图库迁移：成功${success}张，跳过${skipped}张，失败${failed}张。`;
         console.info(message);
@@ -1899,7 +2219,7 @@ const KEY = "zy_kb_system_v2",
             galleryUploadBusy || Boolean(galleryStorageBusy);
           uploadButton.textContent = galleryUploadBusy
             ? "正在处理图片…"
-            : "上传价格图";
+            : "上传图片";
         }
         const backupButton = document.querySelector(".gallery-backup");
         if (backupButton) {
@@ -1954,7 +2274,12 @@ const KEY = "zy_kb_system_v2",
         const button = $("#savePriceGalleryAsset");
         if (button) button.disabled = galleryUploadBusy || !isGalleryUploadValid();
       }
-      function openGalleryUploadDialog(file, processed, source) {
+      function openGalleryUploadDialog(
+        file,
+        processed,
+        source,
+        galleryId = activeGalleryId,
+      ) {
         closeGalleryUploadDialog(true);
         const backdrop = ensureGalleryUploadDialog();
         const previewUrl = URL.createObjectURL(processed.thumbnail.blob);
@@ -1963,6 +2288,7 @@ const KEY = "zy_kb_system_v2",
           file,
           full: processed.full,
           thumbnail: processed.thumbnail,
+          gallery_id: galleryId,
           previewUrl,
           source,
           returnFocus: document.activeElement,
@@ -2036,9 +2362,7 @@ const KEY = "zy_kb_system_v2",
         ) {
           return;
         }
-        const asset = priceGalleryMeta.find(
-          (item) => item.assetId === assetId && !item.deletedAt,
-        );
+        const asset = findActiveGalleryAsset(assetId, (item) => !item.deletedAt);
         if (!asset) {
           toast("素材记录不存在");
           return;
@@ -2129,8 +2453,9 @@ const KEY = "zy_kb_system_v2",
         ) {
           return;
         }
-        const index = priceGalleryMeta.findIndex(
-          (asset) => asset.assetId === state.assetId && !asset.deletedAt,
+        const index = findActiveGalleryAssetIndex(
+          state.assetId,
+          (asset) => !asset.deletedAt,
         );
         if (index < 0) {
           toast("素材记录不存在");
@@ -2150,7 +2475,7 @@ const KEY = "zy_kb_system_v2",
             versionId,
             replacedAt,
           );
-          await verifyPriceGalleryBlobs(asset.assetId);
+          await verifyPriceGalleryBlobs(asset.assetId, asset.gallery_id);
           const [version, versionThumbnail] = await Promise.all([
             getPriceGalleryVersionRecord(
               PRICE_GALLERY_VERSION_STORE,
@@ -2246,9 +2571,7 @@ const KEY = "zy_kb_system_v2",
         ) {
           return;
         }
-        const asset = priceGalleryMeta.find(
-          (item) => item.assetId === assetId && !item.deletedAt,
-        );
+        const asset = findActiveGalleryAsset(assetId, (item) => !item.deletedAt);
         if (!asset) {
           toast("素材记录不存在");
           return;
@@ -2284,7 +2607,10 @@ const KEY = "zy_kb_system_v2",
             assetId,
           );
           if (galleryEditState !== state || backdrop.hidden) return;
-          if (!(record?.blob instanceof Blob)) {
+          if (
+            !(record?.blob instanceof Blob) ||
+            record.gallery_id !== asset.gallery_id
+          ) {
             previewStatus.textContent = "缩略图暂时无法读取";
             return;
           }
@@ -2317,9 +2643,7 @@ const KEY = "zy_kb_system_v2",
       function savePriceGalleryEdits() {
         if (!isGalleryEditValid() || !ensurePriceGalleryMetaWritable()) return;
         const assetId = galleryEditState.assetId;
-        const index = priceGalleryMeta.findIndex(
-          (asset) => asset.assetId === assetId,
-        );
+        const index = findActiveGalleryAssetIndex(assetId);
         if (index < 0) {
           closeGalleryEditDialog();
           toast("素材记录不存在");
@@ -2358,9 +2682,7 @@ const KEY = "zy_kb_system_v2",
           return;
         }
         if (!ensurePriceGalleryMetaWritable()) return;
-        const index = priceGalleryMeta.findIndex(
-          (asset) => asset.assetId === assetId,
-        );
+        const index = findActiveGalleryAssetIndex(assetId);
         if (index < 0) {
           toast("素材记录不存在");
           return;
@@ -2401,9 +2723,7 @@ const KEY = "zy_kb_system_v2",
         ) {
           return;
         }
-        const asset = priceGalleryMeta.find(
-          (item) => item.assetId === assetId && !item.deletedAt,
-        );
+        const asset = findActiveGalleryAsset(assetId, (item) => !item.deletedAt);
         if (!asset) return;
         if (!confirm(`确认删除“${asset.name}”并移入回收站吗？`)) return;
         if (!confirm("删除后默认不再显示，但可在“已删除”筛选中恢复。请再次确认。")) {
@@ -2427,9 +2747,7 @@ const KEY = "zy_kb_system_v2",
       function restorePriceGalleryFromRecycle(assetId) {
         closeGalleryMenus();
         if (galleryStorageBusy || !ensurePriceGalleryMetaWritable()) return;
-        const asset = priceGalleryMeta.find(
-          (item) => item.assetId === assetId && item.deletedAt,
-        );
+        const asset = findActiveGalleryAsset(assetId, (item) => item.deletedAt);
         if (!asset) return;
         if (!confirm(`确认恢复“${asset.name}”吗？`)) return;
         const now = new Date().toISOString();
@@ -2453,7 +2771,12 @@ const KEY = "zy_kb_system_v2",
           getPriceGalleryBlobRecord(PRICE_GALLERY_THUMBNAIL_STORE, assetId),
           getPriceGalleryVersions(assetId),
         ]);
-        if (!(image?.blob instanceof Blob) || !(thumbnail?.blob instanceof Blob)) {
+        if (
+          !(image?.blob instanceof Blob) ||
+          !(thumbnail?.blob instanceof Blob) ||
+          image.gallery_id !== activeGalleryId ||
+          thumbnail.gallery_id !== activeGalleryId
+        ) {
           throw createGalleryError("IMAGE_NOT_FOUND");
         }
         return { image, thumbnail, versions };
@@ -2517,9 +2840,7 @@ const KEY = "zy_kb_system_v2",
       async function permanentlyDeletePriceGalleryAsset(assetId) {
         closeGalleryMenus();
         if (galleryStorageBusy || !ensurePriceGalleryMetaWritable()) return;
-        const asset = priceGalleryMeta.find(
-          (item) => item.assetId === assetId && item.deletedAt,
-        );
+        const asset = findActiveGalleryAsset(assetId, (item) => item.deletedAt);
         if (!asset) return;
         const warning =
           "永久删除后将无法恢复，原图、缩略图和历史版本都会被删除。";
@@ -2589,12 +2910,14 @@ const KEY = "zy_kb_system_v2",
         ) {
           return;
         }
+        const galleryId = activeGalleryId;
+        if (!getGalleryCollection(galleryId)) return;
         closeGalleryMenus();
         setGalleryUploadBusy(true);
         try {
           const processed = await processPriceGalleryFile(file);
-          if (mode !== "gallery") return;
-          openGalleryUploadDialog(file, processed, source);
+          if (mode !== "gallery" || activeGalleryId !== galleryId) return;
+          openGalleryUploadDialog(file, processed, source, galleryId);
         } catch (error) {
           showGalleryError(error);
         } finally {
@@ -2622,16 +2945,28 @@ const KEY = "zy_kb_system_v2",
         ) {
           return;
         }
+        if (
+          mode !== "gallery" ||
+          activeGalleryId !== state.gallery_id ||
+          !getGalleryCollection(state.gallery_id)
+        ) {
+          closeGalleryUploadDialog(true);
+          return;
+        }
         const name = $("#galleryAssetName").value.trim();
         const productCategory = $("#galleryAssetProduct").value;
         const note = $("#galleryAssetNote").value.trim();
         const now = new Date().toISOString();
-        const nextOrder = priceGalleryMeta.reduce(
-          (highest, asset) => Math.max(highest, asset.customOrder),
-          -1,
-        ) + 1;
+        const nextOrder =
+          priceGalleryMeta
+            .filter((asset) => asset.gallery_id === state.gallery_id)
+            .reduce(
+              (highest, asset) => Math.max(highest, asset.customOrder),
+              -1,
+            ) + 1;
         const metadata = {
           assetId: state.assetId,
+          gallery_id: state.gallery_id,
           name,
           productCategory,
           note,
@@ -2656,9 +2991,10 @@ const KEY = "zy_kb_system_v2",
             state.assetId,
             state.full,
             state.thumbnail,
+            state.gallery_id,
           );
           wroteBlobs = true;
-          await verifyPriceGalleryBlobs(state.assetId);
+          await verifyPriceGalleryBlobs(state.assetId, state.gallery_id);
           try {
             persistPriceGalleryMeta([...priceGalleryMeta, metadata]);
           } catch (error) {
@@ -2740,7 +3076,10 @@ const KEY = "zy_kb_system_v2",
                 PRICE_GALLERY_THUMBNAIL_STORE,
                 asset.assetId,
               );
-              if (!(record?.blob instanceof Blob)) {
+              if (
+                !(record?.blob instanceof Blob) ||
+                record.gallery_id !== asset.gallery_id
+              ) {
                 throw createGalleryError("IMAGE_NOT_FOUND");
               }
               const url = URL.createObjectURL(record.blob);
@@ -2794,17 +3133,19 @@ const KEY = "zy_kb_system_v2",
         closeImageViewer();
         const requestToken = ++galleryViewerRequestToken;
         try {
+          const asset = findActiveGalleryAsset(assetId);
+          if (!asset) throw createGalleryError("IMAGE_NOT_FOUND");
           const record = await getPriceGalleryBlobRecord(
             PRICE_GALLERY_IMAGE_STORE,
             assetId,
           );
-          if (!(record?.blob instanceof Blob)) {
+          if (
+            !(record?.blob instanceof Blob) ||
+            record.gallery_id !== asset.gallery_id
+          ) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
           if (requestToken !== galleryViewerRequestToken) return;
-          const asset = priceGalleryMeta.find(
-            (candidate) => candidate.assetId === assetId,
-          );
           galleryViewerUrl = URL.createObjectURL(record.blob);
           const viewer = document.createElement("div");
           viewer.className = "image-viewer";
@@ -2842,11 +3183,16 @@ const KEY = "zy_kb_system_v2",
           return;
         }
         try {
+          const asset = findActiveGalleryAsset(assetId);
+          if (!asset) throw createGalleryError("IMAGE_NOT_FOUND");
           const record = await getPriceGalleryBlobRecord(
             PRICE_GALLERY_IMAGE_STORE,
             assetId,
           );
-          if (!(record?.blob instanceof Blob)) {
+          if (
+            !(record?.blob instanceof Blob) ||
+            record.gallery_id !== asset.gallery_id
+          ) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
           const supportsWebp = ClipboardItem.supports?.("image/webp") === true;
@@ -2872,16 +3218,18 @@ const KEY = "zy_kb_system_v2",
       }
       async function downloadPriceGalleryAsset(assetId) {
         try {
+          const asset = findActiveGalleryAsset(assetId);
+          if (!asset) throw createGalleryError("IMAGE_NOT_FOUND");
           const record = await getPriceGalleryBlobRecord(
             PRICE_GALLERY_IMAGE_STORE,
             assetId,
           );
-          if (!(record?.blob instanceof Blob)) {
+          if (
+            !(record?.blob instanceof Blob) ||
+            record.gallery_id !== asset.gallery_id
+          ) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
-          const asset = priceGalleryMeta.find(
-            (candidate) => candidate.assetId === assetId,
-          );
           const url = URL.createObjectURL(record.blob);
           const anchor = document.createElement("a");
           anchor.href = url;
@@ -2924,7 +3272,7 @@ const KEY = "zy_kb_system_v2",
         ) {
           return;
         }
-        const asset = priceGalleryMeta.find((item) => item.assetId === assetId);
+        const asset = findActiveGalleryAsset(assetId);
         if (!asset) {
           toast("素材记录不存在");
           return;
@@ -2952,7 +3300,9 @@ const KEY = "zy_kb_system_v2",
           if (galleryVersionDialogState !== state) return;
           if (
             !(currentImage?.blob instanceof Blob) ||
-            !(currentThumbnail?.blob instanceof Blob)
+            !(currentThumbnail?.blob instanceof Blob) ||
+            currentImage.gallery_id !== asset.gallery_id ||
+            currentThumbnail.gallery_id !== asset.gallery_id
           ) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
@@ -2961,6 +3311,8 @@ const KEY = "zy_kb_system_v2",
               ({ image, thumbnail }) =>
                 !(image?.blob instanceof Blob) ||
                 !(thumbnail?.blob instanceof Blob) ||
+                image.gallery_id !== asset.gallery_id ||
+                thumbnail.gallery_id !== asset.gallery_id ||
                 image.versionId !== thumbnail.versionId,
             )
           ) {
@@ -3023,13 +3375,19 @@ const KEY = "zy_kb_system_v2",
       }
       async function getGalleryVersionImageRecord(assetId, versionId) {
         if (versionId === "current") {
-          return getPriceGalleryBlobRecord(PRICE_GALLERY_IMAGE_STORE, assetId);
+          const current = await getPriceGalleryBlobRecord(
+            PRICE_GALLERY_IMAGE_STORE,
+            assetId,
+          );
+          return current?.gallery_id === activeGalleryId ? current : null;
         }
         const record = await getPriceGalleryVersionRecord(
           PRICE_GALLERY_VERSION_STORE,
           versionId,
         );
-        return record?.assetId === assetId ? record : null;
+        return record?.assetId === assetId && record.gallery_id === activeGalleryId
+          ? record
+          : null;
       }
       async function openPriceGalleryVersion(assetId, versionId) {
         closeImageViewer();
@@ -3038,7 +3396,7 @@ const KEY = "zy_kb_system_v2",
           if (!(record?.blob instanceof Blob)) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
-          const asset = priceGalleryMeta.find((item) => item.assetId === assetId);
+          const asset = findActiveGalleryAsset(assetId);
           galleryViewerUrl = URL.createObjectURL(record.blob);
           const viewer = document.createElement("div");
           viewer.className = "image-viewer";
@@ -3062,7 +3420,7 @@ const KEY = "zy_kb_system_v2",
           if (!(record?.blob instanceof Blob)) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
-          const asset = priceGalleryMeta.find((item) => item.assetId === assetId);
+          const asset = findActiveGalleryAsset(assetId);
           const suffix =
             versionId === "current"
               ? "当前版本"
@@ -3116,6 +3474,7 @@ const KEY = "zy_kb_system_v2",
         );
         const restoredImage = {
           assetId: asset.assetId,
+          gallery_id: asset.gallery_id,
           blob: selectedImage.blob,
           width: selectedImage.width,
           height: selectedImage.height,
@@ -3124,6 +3483,7 @@ const KEY = "zy_kb_system_v2",
         };
         const restoredThumbnail = {
           assetId: asset.assetId,
+          gallery_id: asset.gallery_id,
           blob: selectedThumbnail.blob,
           width: selectedThumbnail.width,
           height: selectedThumbnail.height,
@@ -3159,9 +3519,7 @@ const KEY = "zy_kb_system_v2",
         };
       }
       async function restorePriceGalleryVersion(assetId, versionId) {
-        const asset = priceGalleryMeta.find(
-          (item) => item.assetId === assetId && !item.deletedAt,
-        );
+        const asset = findActiveGalleryAsset(assetId, (item) => !item.deletedAt);
         if (!asset || versionId === "current" || galleryStorageBusy) return;
         if (!confirm(`确认将“${asset.name}”恢复到所选历史版本吗？`)) return;
         if (!confirm("恢复后，当前版本会自动保存到历史版本。请再次确认。")) {
@@ -3180,6 +3538,8 @@ const KEY = "zy_kb_system_v2",
           if (
             selectedImage?.assetId !== assetId ||
             selectedThumbnail?.assetId !== assetId ||
+            selectedImage.gallery_id !== asset.gallery_id ||
+            selectedThumbnail.gallery_id !== asset.gallery_id ||
             !(selectedImage.blob instanceof Blob) ||
             !(selectedThumbnail.blob instanceof Blob)
           ) {
@@ -3192,7 +3552,7 @@ const KEY = "zy_kb_system_v2",
             selectedThumbnail,
             restoredAt,
           );
-          await verifyPriceGalleryBlobs(assetId);
+          await verifyPriceGalleryBlobs(assetId, asset.gallery_id);
           const [savedCurrentVersion, savedCurrentThumbnail] =
             await Promise.all([
               getPriceGalleryVersionRecord(
@@ -3333,7 +3693,7 @@ const KEY = "zy_kb_system_v2",
           (!value || Number.isFinite(new Date(value).getTime()))
         );
       }
-      function validateGalleryBackupMetadata(raw, index) {
+      function validateGalleryBackupMetadata(raw, index, schemaVersion) {
         const label = `第${index + 1}条素材`;
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
           throw createGalleryBackupError(`${label}缺少有效元数据。`);
@@ -3341,6 +3701,12 @@ const KEY = "zy_kb_system_v2",
         const assetId = String(raw.assetId || "").trim();
         if (!/^price_asset_[A-Za-z0-9_-]{8,128}$/.test(assetId)) {
           throw createGalleryBackupError(`${label}的assetId无效。`);
+        }
+        const galleryId = String(
+          schemaVersion < 3 ? DEFAULT_GALLERY_ID : raw.gallery_id || "",
+        ).trim();
+        if (!/^[A-Za-z0-9_-]{1,120}$/.test(galleryId)) {
+          throw createGalleryBackupError(`${label}的gallery_id无效。`);
         }
         if (
           typeof raw.name !== "string" ||
@@ -3392,6 +3758,7 @@ const KEY = "zy_kb_system_v2",
         }
         return {
           assetId,
+          gallery_id: galleryId,
           name: raw.name.trim(),
           productCategory: raw.productCategory,
           note: raw.note,
@@ -3411,16 +3778,24 @@ const KEY = "zy_kb_system_v2",
       async function validateGalleryBackupImage(
         raw,
         assetId,
+        galleryId,
         label,
         maxBytes,
         maxSide,
         versionId = "",
+        requireGalleryId = false,
       ) {
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
           throw createGalleryBackupError(`${label}记录不存在。`);
         }
         if (raw.assetId !== assetId) {
           throw createGalleryBackupError(`${label}的assetId不一致。`);
+        }
+        const recordGalleryId = String(
+          requireGalleryId ? raw.gallery_id || "" : galleryId,
+        ).trim();
+        if (recordGalleryId !== galleryId) {
+          throw createGalleryBackupError(`${label}的gallery_id不一致。`);
         }
         if (versionId && raw.versionId !== versionId) {
           throw createGalleryBackupError(`${label}的versionId不一致。`);
@@ -3471,6 +3846,7 @@ const KEY = "zy_kb_system_v2",
         }
         return {
           assetId,
+          gallery_id: galleryId,
           ...(versionId ? { versionId } : {}),
           blob,
           width: raw.width,
@@ -3486,6 +3862,54 @@ const KEY = "zy_kb_system_v2",
               }
             : {}),
         };
+      }
+      function validateGalleryBackupCollections(rawBackup) {
+        if (rawBackup.schemaVersion < 3) {
+          return [createDefaultGalleryCollection(rawBackup.exportedAt)];
+        }
+        if (
+          !Array.isArray(rawBackup.collections) ||
+          !Number.isInteger(rawBackup.galleryCount) ||
+          rawBackup.galleryCount !== rawBackup.collections.length ||
+          !rawBackup.collections.length
+        ) {
+          throw createGalleryBackupError("备份素材库元数据或数量无效。");
+        }
+        const seenIds = new Set();
+        const seenNames = new Set();
+        const collections = rawBackup.collections.map((raw, index) => {
+          const collection = sanitizeGalleryCollection(raw, index);
+          if (
+            typeof raw?.gallery_id !== "string" ||
+            typeof raw?.name !== "string" ||
+            typeof raw?.description !== "string" ||
+            typeof raw?.category_id !== "string" ||
+            !Number.isFinite(raw?.sort_order) ||
+            typeof raw?.created_at !== "string" ||
+            typeof raw?.updated_at !== "string" ||
+            typeof raw?.is_default !== "boolean" ||
+            !collection ||
+            collection.category_id !== "products"
+          ) {
+            throw createGalleryBackupError(`第${index + 1}个素材库元数据无效。`);
+          }
+          if (raw.is_default !== (collection.gallery_id === DEFAULT_GALLERY_ID)) {
+            throw createGalleryBackupError(
+              `第${index + 1}个素材库的默认标记无效。`,
+            );
+          }
+          const nameKey = collection.name.toLocaleLowerCase("zh-CN");
+          if (seenIds.has(collection.gallery_id) || seenNames.has(nameKey)) {
+            throw createGalleryBackupError("备份内存在重复的素材库 ID 或名称。");
+          }
+          seenIds.add(collection.gallery_id);
+          seenNames.add(nameKey);
+          return collection;
+        });
+        if (!seenIds.has(DEFAULT_GALLERY_ID)) {
+          throw createGalleryBackupError("备份缺少默认价格图素材库。");
+        }
+        return collections;
       }
       async function validatePriceGalleryBackup(rawBackup) {
         if (Array.isArray(rawBackup)) {
@@ -3514,6 +3938,10 @@ const KEY = "zy_kb_system_v2",
         ) {
           throw createGalleryBackupError("备份导出时间无效。");
         }
+        const collections = validateGalleryBackupCollections(rawBackup);
+        const collectionIds = new Set(
+          collections.map((collection) => collection.gallery_id),
+        );
         if (!Array.isArray(rawBackup.assets)) {
           throw createGalleryBackupError("备份素材列表格式无效。");
         }
@@ -3533,7 +3961,13 @@ const KEY = "zy_kb_system_v2",
             const metadata = validateGalleryBackupMetadata(
               rawAsset?.metadata,
               index,
+              rawBackup.schemaVersion,
             );
+            if (!collectionIds.has(metadata.gallery_id)) {
+              throw createGalleryBackupError(
+                `素材“${metadata.name}”关联的素材库不存在。`,
+              );
+            }
             if (seen.has(metadata.assetId)) {
               throw createGalleryBackupError(
                 `备份内存在重复assetId：${metadata.assetId}。`,
@@ -3543,16 +3977,22 @@ const KEY = "zy_kb_system_v2",
             const image = await validateGalleryBackupImage(
               rawAsset?.image,
               metadata.assetId,
+              metadata.gallery_id,
               `素材“${metadata.name}”的原图`,
               PRICE_GALLERY_LIMITS.maxProcessedBytes,
               PRICE_GALLERY_LIMITS.maxFullSide,
+              "",
+              rawBackup.schemaVersion >= 3,
             );
             const thumbnail = await validateGalleryBackupImage(
               rawAsset?.thumbnail,
               metadata.assetId,
+              metadata.gallery_id,
               `素材“${metadata.name}”的缩略图`,
               PRICE_GALLERY_LIMITS.maxThumbnailBytes,
               PRICE_GALLERY_LIMITS.maxThumbnailSide,
+              "",
+              rawBackup.schemaVersion >= 3,
             );
             if (
               metadata.processedSize !== image.size ||
@@ -3602,18 +4042,22 @@ const KEY = "zy_kb_system_v2",
               const versionImage = await validateGalleryBackupImage(
                 { ...rawVersion.image, createdAt: rawVersion.createdAt },
                 metadata.assetId,
+                metadata.gallery_id,
                 `素材“${metadata.name}”的历史版本原图`,
                 PRICE_GALLERY_LIMITS.maxProcessedBytes,
                 PRICE_GALLERY_LIMITS.maxFullSide,
                 versionId,
+                rawBackup.schemaVersion >= 3,
               );
               const versionThumbnail = await validateGalleryBackupImage(
                 { ...rawVersion.thumbnail, createdAt: rawVersion.createdAt },
                 metadata.assetId,
+                metadata.gallery_id,
                 `素材“${metadata.name}”的历史版本缩略图`,
                 PRICE_GALLERY_LIMITS.maxThumbnailBytes,
                 PRICE_GALLERY_LIMITS.maxThumbnailSide,
                 versionId,
+                rawBackup.schemaVersion >= 3,
               );
               versionImage.createdAt = rawVersion.createdAt;
               versionThumbnail.createdAt = rawVersion.createdAt;
@@ -3654,7 +4098,7 @@ const KEY = "zy_kb_system_v2",
             "备份声明的历史版本数量不一致。",
           );
         }
-        return validated;
+        return { collections, assets: validated };
       }
       function priceGalleryBackupFilename(date = new Date()) {
         const two = (value) => String(value).padStart(2, "0");
@@ -3676,6 +4120,7 @@ const KEY = "zy_kb_system_v2",
         }
         return {
           assetId: record.assetId,
+          gallery_id: String(record.gallery_id || DEFAULT_GALLERY_ID),
           ...(record.versionId ? { versionId: record.versionId } : {}),
           mimeType: record.mimeType,
           width: record.width,
@@ -3699,7 +4144,8 @@ const KEY = "zy_kb_system_v2",
           galleryUploadState ||
           galleryEditState ||
           galleryReplaceState ||
-          galleryVersionDialogState
+          galleryVersionDialogState ||
+          !ensureGalleryCollectionsWritable()
         ) {
           return;
         }
@@ -3727,14 +4173,25 @@ const KEY = "zy_kb_system_v2",
                 `素材“${metadata.name}”缺少对应缩略图，未生成备份。`,
               );
             }
+            if (
+              imageRecord.gallery_id !== metadata.gallery_id ||
+              thumbnailRecord.gallery_id !== metadata.gallery_id
+            ) {
+              throw createGalleryBackupError(
+                `素材“${metadata.name}”的gallery_id归属不一致，未生成备份。`,
+              );
+            }
             const versionRecords = await getPriceGalleryVersions(
               metadata.assetId,
+              metadata.gallery_id,
             );
             const versions = [];
             for (const { image, thumbnail } of versionRecords) {
               if (
                 image?.assetId !== metadata.assetId ||
                 thumbnail?.assetId !== metadata.assetId ||
+                image?.gallery_id !== metadata.gallery_id ||
+                thumbnail?.gallery_id !== metadata.gallery_id ||
                 image.versionId !== thumbnail.versionId
               ) {
                 throw createGalleryBackupError(
@@ -3771,6 +4228,10 @@ const KEY = "zy_kb_system_v2",
             backupType: PRICE_GALLERY_BACKUP_TYPE,
             schemaVersion: PRICE_GALLERY_BACKUP_SCHEMA_VERSION,
             exportedAt: new Date().toISOString(),
+            galleryCount: galleryCollections.length,
+            collections: galleryCollections.map((collection) => ({
+              ...collection,
+            })),
             assetCount: assets.length,
             versionCount: assets.reduce(
               (total, asset) => total + asset.versions.length,
@@ -3828,6 +4289,8 @@ const KEY = "zy_kb_system_v2",
           !(thumbnail?.blob instanceof Blob) ||
           image.blob.size !== asset.image.blob.size ||
           thumbnail.blob.size !== asset.thumbnail.blob.size ||
+          image.gallery_id !== asset.metadata.gallery_id ||
+          thumbnail.gallery_id !== asset.metadata.gallery_id ||
           image.width !== asset.image.width ||
           image.height !== asset.image.height ||
           thumbnail.width !== asset.thumbnail.width ||
@@ -3846,7 +4309,8 @@ const KEY = "zy_kb_system_v2",
           galleryEditState ||
           galleryReplaceState ||
           galleryVersionDialogState ||
-          !ensurePriceGalleryMetaWritable()
+          !ensurePriceGalleryMetaWritable() ||
+          !ensureGalleryCollectionsWritable()
         ) {
           return;
         }
@@ -3856,6 +4320,10 @@ const KEY = "zy_kb_system_v2",
         let pendingCount = 0;
         let writtenIds = [];
         let writtenVersionIds = [];
+        let collectionsPersisted = false;
+        const previousCollections = galleryCollections.map((collection) => ({
+          ...collection,
+        }));
         try {
           if (!/\.json$/i.test(file.name || "")) {
             throw createGalleryBackupError(
@@ -3874,7 +4342,32 @@ const KEY = "zy_kb_system_v2",
               error,
             );
           }
-          const validated = await validatePriceGalleryBackup(rawBackup);
+          const validatedBackup = await validatePriceGalleryBackup(rawBackup);
+          const validated = validatedBackup.assets;
+          const existingCollectionIds = new Set(
+            galleryCollections.map((collection) => collection.gallery_id),
+          );
+          const existingCollectionNames = new Map(
+            galleryCollections.map((collection) => [
+              collection.name.toLocaleLowerCase("zh-CN"),
+              collection.gallery_id,
+            ]),
+          );
+          const collectionAdditions = validatedBackup.collections.filter(
+            (collection) => {
+              if (existingCollectionIds.has(collection.gallery_id)) return false;
+              const matchingId = existingCollectionNames.get(
+                collection.name.toLocaleLowerCase("zh-CN"),
+              );
+              if (matchingId && matchingId !== collection.gallery_id) {
+                throw createGalleryBackupError(
+                  `素材库名称“${collection.name}”已存在，但gallery_id不同；为避免错误合并，已停止恢复。`,
+                );
+              }
+              return true;
+            },
+          );
+          const nextCollections = [...galleryCollections, ...collectionAdditions];
           const [storedIds, storedVersionIds] = await Promise.all([
             getPriceGalleryStoredIds(),
             getPriceGalleryStoredVersionIds(),
@@ -3886,6 +4379,17 @@ const KEY = "zy_kb_system_v2",
           ]);
           const additions = validated.filter((asset) => {
             if (existingIds.has(asset.metadata.assetId)) {
+              const existingMetadata = priceGalleryMeta.find(
+                (item) => item.assetId === asset.metadata.assetId,
+              );
+              if (
+                existingMetadata &&
+                existingMetadata.gallery_id !== asset.metadata.gallery_id
+              ) {
+                throw createGalleryBackupError(
+                  `素材${asset.metadata.assetId}已存在，但gallery_id归属不一致；已停止恢复。`,
+                );
+              }
               skippedCount += 1;
               return false;
             }
@@ -3917,8 +4421,13 @@ const KEY = "zy_kb_system_v2",
                 assetId: asset.metadata.assetId,
               })),
           );
-          pendingCount = additions.length + versionAdditions.length;
-          if (!additions.length && !versionAdditions.length) {
+          pendingCount =
+            additions.length + versionAdditions.length + collectionAdditions.length;
+          if (
+            !additions.length &&
+            !versionAdditions.length &&
+            !collectionAdditions.length
+          ) {
             toast(
               `恢复完成：新增0张，跳过${skippedCount}张，新增版本0个，跳过版本${skippedVersionCount}个，失败0张`,
             );
@@ -3950,6 +4459,8 @@ const KEY = "zy_kb_system_v2",
             if (
               image?.assetId !== version.assetId ||
               thumbnail?.assetId !== version.assetId ||
+              image?.gallery_id !== version.image.gallery_id ||
+              thumbnail?.gallery_id !== version.thumbnail.gallery_id ||
               image?.blob?.size !== version.image.blob.size ||
               thumbnail?.blob?.size !== version.thumbnail.blob.size
             ) {
@@ -3958,19 +4469,34 @@ const KEY = "zy_kb_system_v2",
               );
             }
           }
-          const firstRestoreOrder =
-            priceGalleryMeta.reduce(
-              (highest, asset) => Math.max(highest, asset.customOrder),
-              -1,
-            ) + 1;
+          const nextOrderByGallery = new Map();
+          priceGalleryMeta.forEach((asset) => {
+            nextOrderByGallery.set(
+              asset.gallery_id,
+              Math.max(
+                nextOrderByGallery.get(asset.gallery_id) ?? -1,
+                asset.customOrder,
+              ),
+            );
+          });
           const restoredMetadata = additions
             .map((asset) => asset.metadata)
-            .sort((a, b) => a.customOrder - b.customOrder)
-            .map((metadata, index) => ({
-              ...metadata,
-              customOrder: firstRestoreOrder + index,
-            }));
+            .sort(
+              (a, b) =>
+                a.gallery_id.localeCompare(b.gallery_id) ||
+                a.customOrder - b.customOrder,
+            )
+            .map((metadata) => {
+              const nextOrder =
+                (nextOrderByGallery.get(metadata.gallery_id) ?? -1) + 1;
+              nextOrderByGallery.set(metadata.gallery_id, nextOrder);
+              return { ...metadata, customOrder: nextOrder };
+            });
           try {
+            if (collectionAdditions.length) {
+              persistGalleryCollections(nextCollections);
+              collectionsPersisted = true;
+            }
             if (restoredMetadata.length) {
               persistPriceGalleryMeta([
                 ...priceGalleryMeta,
@@ -3985,11 +4511,26 @@ const KEY = "zy_kb_system_v2",
           }
           writtenIds = [];
           writtenVersionIds = [];
-          if (mode === "gallery") renderPriceGalleryResults();
+          collectionsPersisted = false;
+          if (mode === "gallery") {
+            renderGroupList(activeG);
+            renderPriceGalleryResults();
+          }
           toast(
-            `恢复完成：新增${additions.length}张，跳过${skippedCount}张，新增版本${versionAdditions.length}个，跳过版本${skippedVersionCount}个，失败0张，当前共${priceGalleryMeta.length}张`,
+            `恢复完成：新增素材库${collectionAdditions.length}个，新增${additions.length}张，跳过${skippedCount}张，新增版本${versionAdditions.length}个，跳过版本${skippedVersionCount}个，失败0张，当前共${priceGalleryMeta.length}张`,
           );
         } catch (error) {
+          if (collectionsPersisted) {
+            try {
+              persistGalleryCollections(previousCollections);
+              collectionsPersisted = false;
+            } catch (rollbackError) {
+              alert(
+                `${galleryBackupErrorMessage(error)}\n素材库元数据自动回滚未成功，请停止继续恢复并检查浏览器存储。`,
+              );
+              return;
+            }
+          }
           if (writtenIds.length || writtenVersionIds.length) {
             try {
               await deletePriceGalleryRestoreRecords(
@@ -4170,10 +4711,12 @@ const KEY = "zy_kb_system_v2",
         const customOrderById = new Map(
           mergedIds.map((assetId, index) => [assetId, index]),
         );
-        const nextMeta = priceGalleryMeta.map((asset) => ({
-          ...asset,
-          customOrder: customOrderById.get(asset.assetId),
-        }));
+        const nextMeta = priceGalleryMeta.map((asset) =>
+          asset.gallery_id === activeGalleryId &&
+          customOrderById.has(asset.assetId)
+            ? { ...asset, customOrder: customOrderById.get(asset.assetId) }
+            : asset,
+        );
         try {
           persistPriceGalleryMeta(nextMeta);
         } catch (error) {
@@ -4271,11 +4814,12 @@ const KEY = "zy_kb_system_v2",
           return;
         }
         const activeCount = priceGalleryMeta.filter(
-          (asset) => !asset.deletedAt,
+          (asset) =>
+            asset.gallery_id === activeGalleryId && !asset.deletedAt,
         ).length;
         results.innerHTML = activeCount || galleryViewState.status === "deleted"
-          ? '<div class="gallery-empty"><b>没有符合条件的价格图</b><span>可调整搜索词或筛选条件。</span></div>'
-          : '<div class="gallery-empty"><b>暂无价格图，可通过上传或粘贴添加</b><span>价格图仅保存在当前浏览器，不会自动跨设备同步。</span></div>';
+          ? '<div class="gallery-empty"><b>没有符合条件的图片素材</b><span>可调整搜索词或筛选条件。</span></div>'
+          : '<div class="gallery-empty"><b>暂无素材，可通过上传或粘贴添加。</b><span>图片仅保存在当前浏览器，不会自动跨设备同步。</span></div>';
       }
       function updatePriceGalleryFilter(key, value) {
         if (!["query", "product", "status", "sort"].includes(key)) return;
@@ -4285,19 +4829,24 @@ const KEY = "zy_kb_system_v2",
         persistUiState();
       }
       function renderPriceGallery() {
+        const collection = getGalleryCollection();
+        if (!collection) return;
         const productOptions = [
           ["all", "全部"],
           ...GALLERY_PRODUCTS.map((product) => [product, product]),
         ];
         closeGalleryMenus();
-        $("#main").innerHTML = `<section class="gallery-shell" aria-labelledby="galleryTitle"><header class="gallery-header"><div><p class="gallery-eyebrow">产品价格图</p><h1 id="galleryTitle">价格图素材库</h1><p>上传或粘贴价格图后，原图和缩略图保存在当前浏览器。本机数据不会自动跨设备同步。</p></div><div class="gallery-header-actions"><button type="button" class="btn gallery-backup" onclick="backupPriceGallery()">备份图库</button><button type="button" class="btn gallery-restore" onclick="selectPriceGalleryBackupFile()">恢复图库</button><button type="button" class="btn primary gallery-upload" onclick="selectPriceGalleryFile()">上传价格图</button><input id="priceGalleryBackupInput" type="file" accept="application/json,.json" aria-label="选择价格图库备份文件" hidden onchange="handlePriceGalleryBackupInput(event)"><input id="priceGalleryFileInput" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" aria-label="选择价格图文件" hidden onchange="handlePriceGalleryFileInput(event)"></div></header><div class="gallery-toolbar" role="search" aria-label="价格图筛选"><label class="gallery-search-field"><span>搜索</span><input id="gallerySearch" type="search" value="${esc(galleryViewState.query)}" placeholder="搜索图片名称、备注或产品" oninput="updatePriceGalleryFilter('query',this.value)"></label><label><span>产品分类</span><select onchange="updatePriceGalleryFilter('product',this.value)">${gallerySelectOptions(productOptions, galleryViewState.product)}</select></label><label><span>状态</span><select onchange="updatePriceGalleryFilter('status',this.value)">${gallerySelectOptions([["all", "全部"], ["current", "当前使用"], ["history", "历史"], ["deleted", "已删除 / 回收站"]], galleryViewState.status)}</select></label><label><span>排序方式</span><select onchange="updatePriceGalleryFilter('sort',this.value)">${gallerySelectOptions([["custom", "自定义排序"], ["updated", "最近更新"], ["uploaded", "最近上传"], ["name", "名称排序"]], galleryViewState.sort)}</select></label></div><div class="gallery-subbar"><p>在图库空白区域按 Command+V / Ctrl+V，可粘贴从微信复制的图片；一次处理 1 张。</p><strong id="gallerySummary"></strong></div><div id="galleryResults" aria-live="polite"></div></section>`;
+        $("#main").innerHTML = `<section class="gallery-shell" aria-labelledby="galleryTitle"><header class="gallery-header"><div><p class="gallery-eyebrow">产品素材图库</p><h1 id="galleryTitle">${esc(collection.name)}</h1>${collection.description ? `<p>${esc(collection.description)}</p>` : ""}<p class="gallery-storage-note">上传或粘贴图片后，原图和缩略图保存在当前浏览器。本机数据不会自动跨设备同步。</p></div><div class="gallery-header-actions"><button type="button" class="btn gallery-backup" onclick="backupPriceGallery()">备份图库</button><button type="button" class="btn gallery-restore" onclick="selectPriceGalleryBackupFile()">恢复图库</button><button type="button" class="btn primary gallery-upload" onclick="selectPriceGalleryFile()">上传图片</button><input id="priceGalleryBackupInput" type="file" accept="application/json,.json" aria-label="选择图库备份文件" hidden onchange="handlePriceGalleryBackupInput(event)"><input id="priceGalleryFileInput" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" aria-label="选择图片文件" hidden onchange="handlePriceGalleryFileInput(event)"></div></header><div class="gallery-toolbar" role="search" aria-label="图库筛选"><label class="gallery-search-field"><span>搜索</span><input id="gallerySearch" type="search" value="${esc(galleryViewState.query)}" placeholder="搜索图片名称、备注或产品" oninput="updatePriceGalleryFilter('query',this.value)"></label><label><span>产品分类</span><select onchange="updatePriceGalleryFilter('product',this.value)">${gallerySelectOptions(productOptions, galleryViewState.product)}</select></label><label><span>状态</span><select onchange="updatePriceGalleryFilter('status',this.value)">${gallerySelectOptions([["all", "全部"], ["current", "当前使用"], ["history", "历史"], ["deleted", "已删除 / 回收站"]], galleryViewState.status)}</select></label><label><span>排序方式</span><select onchange="updatePriceGalleryFilter('sort',this.value)">${gallerySelectOptions([["custom", "自定义排序"], ["updated", "最近更新"], ["uploaded", "最近上传"], ["name", "名称排序"]], galleryViewState.sort)}</select></label></div><div class="gallery-subbar"><p>在图库空白区域按 Command+V / Ctrl+V，可粘贴从微信复制的图片；一次处理 1 张。</p><strong id="gallerySummary"></strong></div><div id="galleryResults" aria-live="polite"></div></section>`;
         bindPriceGalleryResultEvents();
         refreshGalleryActionButtons();
         renderPriceGalleryResults();
       }
-      function openPriceGallery(gi) {
+      function openPriceGallery(gi, galleryId = DEFAULT_GALLERY_ID) {
         if (!isProductCenterGroup(groups[gi])) return;
+        const collection = getGalleryCollection(galleryId);
+        if (!collection || collection.category_id !== "products") return;
         activeG = gi;
+        activeGalleryId = collection.gallery_id;
         activeI = 0;
         activeArticleVisible = false;
         editing = false;
@@ -5843,6 +6392,7 @@ const KEY = "zy_kb_system_v2",
           categoryId,
           contentId: isStableContentId(contentId) ? contentId : "",
           gallery: {
+            galleryId: activeGalleryId,
             query: galleryViewState.query,
             product: galleryViewState.product,
             status: galleryViewState.status,
@@ -5990,7 +6540,10 @@ const KEY = "zy_kb_system_v2",
               isProductCenterGroup(groups[savedGroupIndex])
             ) {
               try {
-                openPriceGallery(savedGroupIndex);
+                const savedGalleryId = String(
+                  state.gallery?.galleryId || DEFAULT_GALLERY_ID,
+                );
+                openPriceGallery(savedGroupIndex, savedGalleryId);
                 if (mode !== "gallery") throw new Error("gallery unavailable");
               } catch (error) {
                 resetScroll();
@@ -6027,6 +6580,8 @@ const KEY = "zy_kb_system_v2",
       }
       function setMode(m) {
         finishArticleDrag(null, false);
+        closeProductAddDialog(true);
+        closeGalleryCreateDialog(true);
         if (m !== "gallery") {
           closeGalleryMenus();
           clearGalleryThumbnailUrls();
@@ -6204,7 +6759,183 @@ const KEY = "zy_kb_system_v2",
         save();
         openGroup(groups.length - 1);
       }
-      function addItem() {
+      function ensureProductAddDialog() {
+        let backdrop = $("#productAddTypeDialog");
+        if (backdrop) return backdrop;
+        backdrop = document.createElement("div");
+        backdrop.id = "productAddTypeDialog";
+        backdrop.className = "gallery-upload-backdrop product-add-backdrop";
+        backdrop.hidden = true;
+        backdrop.setAttribute("aria-hidden", "true");
+        backdrop.innerHTML = `<section class="gallery-upload-dialog product-add-dialog" role="dialog" aria-modal="true" aria-labelledby="productAddTypeTitle"><header><div><p>产品中心</p><h2 id="productAddTypeTitle">选择新增类型</h2></div><button type="button" class="gallery-upload-close" aria-label="关闭新增类型窗口" title="关闭" onclick="closeProductAddDialog()">×</button></header><div class="product-add-options"><button type="button" class="product-add-option" onclick="chooseProductAddType('article')"><b>新增普通文章</b><span>继续使用现有文章创建、编辑与分类流程</span></button><button type="button" class="product-add-option" onclick="chooseProductAddType('gallery')"><b>新增素材库</b><span>创建一个可独立上传和管理图片的空素材库</span></button></div><footer><button type="button" class="btn" onclick="closeProductAddDialog()">取消</button></footer></section>`;
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) closeProductAddDialog();
+        });
+        document.body.appendChild(backdrop);
+        return backdrop;
+      }
+      function openProductAddDialog() {
+        if (
+          mode !== "group" ||
+          !isProductCenterGroup(groups[activeG]) ||
+          galleryStorageBusy ||
+          galleryUploadBusy
+        ) {
+          return;
+        }
+        const backdrop = ensureProductAddDialog();
+        productAddDialogReturnFocus = document.activeElement;
+        backdrop.hidden = false;
+        backdrop.setAttribute("aria-hidden", "false");
+        document.body.classList.add("managing-product-add");
+        requestAnimationFrame(() =>
+          backdrop.querySelector(".product-add-option")?.focus(),
+        );
+      }
+      function closeProductAddDialog(force = false) {
+        const backdrop = $("#productAddTypeDialog");
+        if (!backdrop || backdrop.hidden) return;
+        backdrop.hidden = true;
+        backdrop.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("managing-product-add");
+        const returnFocus = productAddDialogReturnFocus;
+        productAddDialogReturnFocus = null;
+        if (!force) returnFocus?.focus?.();
+      }
+      function createGalleryCollectionId() {
+        const used = new Set(galleryCollections.map((item) => item.gallery_id));
+        let galleryId = "";
+        do {
+          const random =
+            globalThis.crypto?.randomUUID?.().replace(/-/g, "") ||
+            Math.random().toString(36).slice(2) + Date.now().toString(36);
+          galleryId = `gallery_${random}`;
+        } while (used.has(galleryId));
+        return galleryId;
+      }
+      function ensureGalleryCreateDialog() {
+        let backdrop = $("#galleryCreateDialog");
+        if (backdrop) return backdrop;
+        backdrop = document.createElement("div");
+        backdrop.id = "galleryCreateDialog";
+        backdrop.className = "gallery-upload-backdrop gallery-create-backdrop";
+        backdrop.hidden = true;
+        backdrop.setAttribute("aria-hidden", "true");
+        backdrop.innerHTML = `<section class="gallery-upload-dialog gallery-create-dialog" role="dialog" aria-modal="true" aria-labelledby="galleryCreateTitle"><header><div><p>产品中心</p><h2 id="galleryCreateTitle">新增素材库</h2></div><button type="button" class="gallery-upload-close" aria-label="关闭新增素材库窗口" title="关闭" onclick="closeGalleryCreateDialog()">×</button></header><div class="gallery-upload-fields gallery-create-fields"><label><span>素材库名称 <em>必填</em></span><input id="galleryCreateName" type="text" maxlength="80" autocomplete="off" placeholder="请输入素材库名称" oninput="updateGalleryCreateValidation(true)"></label><label><span>素材库说明 <em>选填</em></span><textarea id="galleryCreateDescription" rows="4" maxlength="500" placeholder="简要说明该素材库的用途"></textarea></label><p class="gallery-create-error" id="galleryCreateError" role="alert" aria-live="polite"></p></div><footer><button type="button" class="btn" onclick="closeGalleryCreateDialog()">取消</button><button type="button" class="btn primary" id="confirmGalleryCreate" onclick="confirmCreateGallery()">确认创建</button></footer></section>`;
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) closeGalleryCreateDialog();
+        });
+        backdrop.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" && event.target.id === "galleryCreateName") {
+            event.preventDefault();
+            confirmCreateGallery();
+          }
+        });
+        document.body.appendChild(backdrop);
+        return backdrop;
+      }
+      function getGalleryCreateValidationMessage() {
+        const name = $("#galleryCreateName")?.value.trim() || "";
+        if (!name) return "素材库名称不能为空";
+        const nameKey = name.toLocaleLowerCase("zh-CN");
+        if (
+          galleryCollections.some(
+            (collection) =>
+              collection.name.toLocaleLowerCase("zh-CN") === nameKey,
+          )
+        ) {
+          return "素材库名称已存在";
+        }
+        return "";
+      }
+      function updateGalleryCreateValidation(showBlankError = false) {
+        const error = getGalleryCreateValidationMessage();
+        const input = $("#galleryCreateName");
+        const errorNode = $("#galleryCreateError");
+        const button = $("#confirmGalleryCreate");
+        const visibleError =
+          error === "素材库名称不能为空" && !showBlankError ? "" : error;
+        if (input) {
+          input.setAttribute("aria-invalid", visibleError ? "true" : "false");
+        }
+        if (errorNode) errorNode.textContent = visibleError;
+        if (button) button.disabled = error === "素材库名称已存在";
+        return error;
+      }
+      function openGalleryCreateDialog() {
+        if (!ensureGalleryCollectionsWritable()) return;
+        const backdrop = ensureGalleryCreateDialog();
+        galleryCreateDialogReturnFocus = document.activeElement;
+        $("#galleryCreateName").value = "";
+        $("#galleryCreateDescription").value = "";
+        $("#galleryCreateError").textContent = "";
+        backdrop.hidden = false;
+        backdrop.setAttribute("aria-hidden", "false");
+        document.body.classList.add("creating-gallery-collection");
+        updateGalleryCreateValidation();
+        requestAnimationFrame(() => $("#galleryCreateName")?.focus());
+      }
+      function closeGalleryCreateDialog(force = false) {
+        const backdrop = $("#galleryCreateDialog");
+        if (!backdrop || backdrop.hidden) return;
+        backdrop.hidden = true;
+        backdrop.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("creating-gallery-collection");
+        const returnFocus = galleryCreateDialogReturnFocus;
+        galleryCreateDialogReturnFocus = null;
+        if (!force) returnFocus?.focus?.();
+      }
+      function chooseProductAddType(type) {
+        if (type === "article") {
+          closeProductAddDialog(true);
+          addRegularArticle();
+          return;
+        }
+        if (type === "gallery") {
+          closeProductAddDialog(true);
+          openGalleryCreateDialog();
+        }
+      }
+      function confirmCreateGallery() {
+        if (
+          mode !== "group" ||
+          !isProductCenterGroup(groups[activeG]) ||
+          !ensureGalleryCollectionsWritable()
+        ) {
+          return;
+        }
+        const error = updateGalleryCreateValidation(true);
+        if (error) return;
+        const name = $("#galleryCreateName").value.trim();
+        const description = $("#galleryCreateDescription").value.trim();
+        const now = new Date().toISOString();
+        const sortOrder =
+          galleryCollections.reduce(
+            (highest, collection) => Math.max(highest, collection.sort_order),
+            -1,
+          ) + 1;
+        const collection = {
+          gallery_id: createGalleryCollectionId(),
+          name,
+          description,
+          category_id: "products",
+          sort_order: sortOrder,
+          created_at: now,
+          updated_at: now,
+          is_default: false,
+        };
+        try {
+          persistGalleryCollections([...galleryCollections, collection]);
+        } catch (saveError) {
+          showGalleryError(saveError);
+          return;
+        }
+        closeGalleryCreateDialog(true);
+        renderGroupList(activeG);
+        openPriceGallery(activeG, collection.gallery_id);
+        toast(`素材库“${collection.name}”已创建`);
+      }
+      function addRegularArticle() {
         if (mode !== "group") return;
         const contentId = createContentId();
         groups[activeG].items.unshift({
@@ -6230,6 +6961,14 @@ const KEY = "zy_kb_system_v2",
         save();
         editing = true;
         openDoc(activeG, activeI);
+      }
+      function addItem() {
+        if (mode !== "group") return;
+        if (isProductCenterGroup(groups[activeG])) {
+          openProductAddDialog();
+          return;
+        }
+        addRegularArticle();
       }
       function deleteCurrent() {
         if (!confirm("确定删除这条内容吗？")) return;
@@ -6294,7 +7033,7 @@ const KEY = "zy_kb_system_v2",
                 importedGroups?.backupType === PRICE_GALLERY_BACKUP_TYPE
               ) {
                 alert(
-                  '这是价格图库备份，请进入“价格图素材库”并点击“恢复图库”。',
+                  '这是素材图库备份，请进入产品中心的任一素材库并点击“恢复图库”。',
                 );
                 return;
               }
@@ -6347,6 +7086,8 @@ const KEY = "zy_kb_system_v2",
           finishArticleDrag(null, false);
           closeMoveDialog();
           closeCategoryRenameDialog();
+          closeProductAddDialog();
+          closeGalleryCreateDialog();
         }
       });
       document.addEventListener("paste", handlePriceGalleryPaste);
