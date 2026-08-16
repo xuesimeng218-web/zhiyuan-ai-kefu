@@ -1286,6 +1286,27 @@ const KEY = "zy_kb_system_v2",
           );
         }
       }
+      function getPriceGalleryRecordGalleryId(record) {
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+          return "";
+        }
+        if (!Object.prototype.hasOwnProperty.call(record, "gallery_id")) {
+          return DEFAULT_GALLERY_ID;
+        }
+        if (typeof record.gallery_id !== "string") return "";
+        const galleryId = record.gallery_id.trim();
+        return /^[A-Za-z0-9_-]{1,120}$/.test(galleryId) ? galleryId : "";
+      }
+      function isPriceGalleryBlobRecordForGallery(record, galleryId) {
+        return (
+          Boolean(record) &&
+          typeof record === "object" &&
+          !Array.isArray(record) &&
+          record?.blob instanceof Blob &&
+          record.blob.size > 0 &&
+          getPriceGalleryRecordGalleryId(record) === galleryId
+        );
+      }
       async function deletePriceGalleryBlobs(assetId) {
         const db = await openPriceGalleryDb();
         const transaction = db.transaction(
@@ -1307,10 +1328,8 @@ const KEY = "zy_kb_system_v2",
           getPriceGalleryBlobRecord(PRICE_GALLERY_THUMBNAIL_STORE, assetId),
         ]);
         if (
-          !(full?.blob instanceof Blob) ||
-          !(thumbnail?.blob instanceof Blob) ||
-          full.gallery_id !== galleryId ||
-          thumbnail.gallery_id !== galleryId
+          !isPriceGalleryBlobRecordForGallery(full, galleryId) ||
+          !isPriceGalleryBlobRecordForGallery(thumbnail, galleryId)
         ) {
           throw createGalleryError("IDB_UNAVAILABLE");
         }
@@ -1373,12 +1392,16 @@ const KEY = "zy_kb_system_v2",
           ]);
           const thumbnailById = new Map(
             thumbnails
-              .filter((record) => record.gallery_id === galleryId)
+              .filter((record) =>
+                isPriceGalleryBlobRecordForGallery(record, galleryId),
+              )
               .map((record) => [record.versionId, record]),
           );
           const imageById = new Map(
             images
-              .filter((record) => record.gallery_id === galleryId)
+              .filter((record) =>
+                isPriceGalleryBlobRecordForGallery(record, galleryId),
+              )
               .map((record) => [record.versionId, record]),
           );
           return [...new Set([...imageById.keys(), ...thumbnailById.keys()])]
@@ -1420,10 +1443,8 @@ const KEY = "zy_kb_system_v2",
           ),
         ]);
         if (
-          !(oldImage?.blob instanceof Blob) ||
-          !(oldThumbnail?.blob instanceof Blob) ||
-          oldImage.gallery_id !== asset.gallery_id ||
-          oldThumbnail.gallery_id !== asset.gallery_id
+          !isPriceGalleryBlobRecordForGallery(oldImage, asset.gallery_id) ||
+          !isPriceGalleryBlobRecordForGallery(oldThumbnail, asset.gallery_id)
         ) {
           throw createGalleryError("IMAGE_NOT_FOUND");
         }
@@ -1521,7 +1542,10 @@ const KEY = "zy_kb_system_v2",
           .objectStore(PRICE_GALLERY_VERSION_THUMBNAIL_STORE)
           .delete(snapshot.oldVersionThumbnail.versionId);
         await waitForGalleryTransaction(transaction);
-        await verifyPriceGalleryBlobs(assetId, snapshot.oldImage.gallery_id);
+        await verifyPriceGalleryBlobs(
+          assetId,
+          getPriceGalleryRecordGalleryId(snapshot.oldImage),
+        );
       }
       async function getPriceGalleryStoredIds() {
         const db = await openPriceGalleryDb();
@@ -2607,10 +2631,7 @@ const KEY = "zy_kb_system_v2",
             assetId,
           );
           if (galleryEditState !== state || backdrop.hidden) return;
-          if (
-            !(record?.blob instanceof Blob) ||
-            record.gallery_id !== asset.gallery_id
-          ) {
+          if (!isPriceGalleryBlobRecordForGallery(record, asset.gallery_id)) {
             previewStatus.textContent = "缩略图暂时无法读取";
             return;
           }
@@ -2772,10 +2793,8 @@ const KEY = "zy_kb_system_v2",
           getPriceGalleryVersions(assetId),
         ]);
         if (
-          !(image?.blob instanceof Blob) ||
-          !(thumbnail?.blob instanceof Blob) ||
-          image.gallery_id !== activeGalleryId ||
-          thumbnail.gallery_id !== activeGalleryId
+          !isPriceGalleryBlobRecordForGallery(image, activeGalleryId) ||
+          !isPriceGalleryBlobRecordForGallery(thumbnail, activeGalleryId)
         ) {
           throw createGalleryError("IMAGE_NOT_FOUND");
         }
@@ -3077,8 +3096,7 @@ const KEY = "zy_kb_system_v2",
                 asset.assetId,
               );
               if (
-                !(record?.blob instanceof Blob) ||
-                record.gallery_id !== asset.gallery_id
+                !isPriceGalleryBlobRecordForGallery(record, asset.gallery_id)
               ) {
                 throw createGalleryError("IMAGE_NOT_FOUND");
               }
@@ -3139,10 +3157,7 @@ const KEY = "zy_kb_system_v2",
             PRICE_GALLERY_IMAGE_STORE,
             assetId,
           );
-          if (
-            !(record?.blob instanceof Blob) ||
-            record.gallery_id !== asset.gallery_id
-          ) {
+          if (!isPriceGalleryBlobRecordForGallery(record, asset.gallery_id)) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
           if (requestToken !== galleryViewerRequestToken) return;
@@ -3189,10 +3204,7 @@ const KEY = "zy_kb_system_v2",
             PRICE_GALLERY_IMAGE_STORE,
             assetId,
           );
-          if (
-            !(record?.blob instanceof Blob) ||
-            record.gallery_id !== asset.gallery_id
-          ) {
+          if (!isPriceGalleryBlobRecordForGallery(record, asset.gallery_id)) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
           const supportsWebp = ClipboardItem.supports?.("image/webp") === true;
@@ -3224,10 +3236,7 @@ const KEY = "zy_kb_system_v2",
             PRICE_GALLERY_IMAGE_STORE,
             assetId,
           );
-          if (
-            !(record?.blob instanceof Blob) ||
-            record.gallery_id !== asset.gallery_id
-          ) {
+          if (!isPriceGalleryBlobRecordForGallery(record, asset.gallery_id)) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
           const url = URL.createObjectURL(record.blob);
@@ -3299,20 +3308,25 @@ const KEY = "zy_kb_system_v2",
           ]);
           if (galleryVersionDialogState !== state) return;
           if (
-            !(currentImage?.blob instanceof Blob) ||
-            !(currentThumbnail?.blob instanceof Blob) ||
-            currentImage.gallery_id !== asset.gallery_id ||
-            currentThumbnail.gallery_id !== asset.gallery_id
+            !isPriceGalleryBlobRecordForGallery(
+              currentImage,
+              asset.gallery_id,
+            ) ||
+            !isPriceGalleryBlobRecordForGallery(
+              currentThumbnail,
+              asset.gallery_id,
+            )
           ) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
           if (
             history.some(
               ({ image, thumbnail }) =>
-                !(image?.blob instanceof Blob) ||
-                !(thumbnail?.blob instanceof Blob) ||
-                image.gallery_id !== asset.gallery_id ||
-                thumbnail.gallery_id !== asset.gallery_id ||
+                !isPriceGalleryBlobRecordForGallery(image, asset.gallery_id) ||
+                !isPriceGalleryBlobRecordForGallery(
+                  thumbnail,
+                  asset.gallery_id,
+                ) ||
                 image.versionId !== thumbnail.versionId,
             )
           ) {
@@ -3379,13 +3393,16 @@ const KEY = "zy_kb_system_v2",
             PRICE_GALLERY_IMAGE_STORE,
             assetId,
           );
-          return current?.gallery_id === activeGalleryId ? current : null;
+          return isPriceGalleryBlobRecordForGallery(current, activeGalleryId)
+            ? current
+            : null;
         }
         const record = await getPriceGalleryVersionRecord(
           PRICE_GALLERY_VERSION_STORE,
           versionId,
         );
-        return record?.assetId === assetId && record.gallery_id === activeGalleryId
+        return record?.assetId === assetId &&
+          isPriceGalleryBlobRecordForGallery(record, activeGalleryId)
           ? record
           : null;
       }
@@ -3452,8 +3469,8 @@ const KEY = "zy_kb_system_v2",
           ),
         ]);
         if (
-          !(oldImage?.blob instanceof Blob) ||
-          !(oldThumbnail?.blob instanceof Blob)
+          !isPriceGalleryBlobRecordForGallery(oldImage, asset.gallery_id) ||
+          !isPriceGalleryBlobRecordForGallery(oldThumbnail, asset.gallery_id)
         ) {
           throw createGalleryError("IMAGE_NOT_FOUND");
         }
@@ -3538,10 +3555,14 @@ const KEY = "zy_kb_system_v2",
           if (
             selectedImage?.assetId !== assetId ||
             selectedThumbnail?.assetId !== assetId ||
-            selectedImage.gallery_id !== asset.gallery_id ||
-            selectedThumbnail.gallery_id !== asset.gallery_id ||
-            !(selectedImage.blob instanceof Blob) ||
-            !(selectedThumbnail.blob instanceof Blob)
+            !isPriceGalleryBlobRecordForGallery(
+              selectedImage,
+              asset.gallery_id,
+            ) ||
+            !isPriceGalleryBlobRecordForGallery(
+              selectedThumbnail,
+              asset.gallery_id,
+            )
           ) {
             throw createGalleryError("IMAGE_NOT_FOUND");
           }
@@ -4174,8 +4195,10 @@ const KEY = "zy_kb_system_v2",
               );
             }
             if (
-              imageRecord.gallery_id !== metadata.gallery_id ||
-              thumbnailRecord.gallery_id !== metadata.gallery_id
+              getPriceGalleryRecordGalleryId(imageRecord) !==
+                metadata.gallery_id ||
+              getPriceGalleryRecordGalleryId(thumbnailRecord) !==
+                metadata.gallery_id
             ) {
               throw createGalleryBackupError(
                 `素材“${metadata.name}”的gallery_id归属不一致，未生成备份。`,
@@ -4190,8 +4213,10 @@ const KEY = "zy_kb_system_v2",
               if (
                 image?.assetId !== metadata.assetId ||
                 thumbnail?.assetId !== metadata.assetId ||
-                image?.gallery_id !== metadata.gallery_id ||
-                thumbnail?.gallery_id !== metadata.gallery_id ||
+                getPriceGalleryRecordGalleryId(image) !==
+                  metadata.gallery_id ||
+                getPriceGalleryRecordGalleryId(thumbnail) !==
+                  metadata.gallery_id ||
                 image.versionId !== thumbnail.versionId
               ) {
                 throw createGalleryBackupError(
