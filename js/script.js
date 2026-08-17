@@ -115,7 +115,6 @@ const KEY = "zy_kb_system_v2",
       let galleryCreateDialogReturnFocus = null;
       let latestMoveUndo = null;
       const $ = (s) => document.querySelector(s);
-      save();
       function esc(s) {
         return String(s ?? "").replace(
           /[&<>"']/g,
@@ -5503,6 +5502,178 @@ const KEY = "zy_kb_system_v2",
         renderMovedArticle(result.targetIndex);
         toast("已撤销移动");
       }
+      const CATEGORY_THEME_DEFINITIONS = Object.freeze({
+        product: Object.freeze({
+          primary: "#5b4fdb",
+          primaryRgb: "91, 79, 219",
+          secondary: "#7ddff2",
+          secondaryRgb: "125, 223, 242",
+          soft: "#eee9ff",
+          border: "#d8d2fa",
+        }),
+        claude: Object.freeze({
+          primary: "#7c5ce7",
+          primaryRgb: "124, 92, 231",
+          secondary: "#f2a9d0",
+          secondaryRgb: "242, 169, 208",
+          soft: "#f1ecff",
+          border: "#ddd2fb",
+        }),
+        escort: Object.freeze({
+          primary: "#258bb5",
+          primaryRgb: "37, 139, 181",
+          secondary: "#78d8c5",
+          secondaryRgb: "120, 216, 197",
+          soft: "#e8f8fb",
+          border: "#c9eaf0",
+        }),
+        onhold: Object.freeze({
+          primary: "#d96b76",
+          primaryRgb: "217, 107, 118",
+          secondary: "#f2ad72",
+          secondaryRgb: "242, 173, 114",
+          soft: "#fff0f0",
+          border: "#f3d0ce",
+        }),
+        aftersale: Object.freeze({
+          primary: "#a45fd0",
+          primaryRgb: "164, 95, 208",
+          secondary: "#f0a16b",
+          secondaryRgb: "240, 161, 107",
+          soft: "#f7edfc",
+          border: "#e6d0f3",
+        }),
+        environment: Object.freeze({
+          primary: "#168e9f",
+          primaryRgb: "22, 142, 159",
+          secondary: "#69b9f1",
+          secondaryRgb: "105, 185, 241",
+          soft: "#e8f8fa",
+          border: "#c6e8ed",
+        }),
+        chatgpt: Object.freeze({
+          primary: "#5367d9",
+          primaryRgb: "83, 103, 217",
+          secondary: "#81b7f5",
+          secondaryRgb: "129, 183, 245",
+          soft: "#edf0ff",
+          border: "#d1d8f8",
+        }),
+        invoice: Object.freeze({
+          primary: "#c46b91",
+          primaryRgb: "196, 107, 145",
+          secondary: "#e7b85c",
+          secondaryRgb: "231, 184, 92",
+          soft: "#fcedf4",
+          border: "#efd2df",
+        }),
+        tutorial: Object.freeze({
+          primary: "#287f9e",
+          primaryRgb: "40, 127, 158",
+          secondary: "#8069da",
+          secondaryRgb: "128, 105, 218",
+          soft: "#eaf5f8",
+          border: "#cbe3ea",
+        }),
+        training: Object.freeze({
+          primary: "#359d7c",
+          primaryRgb: "53, 157, 124",
+          secondary: "#9a82df",
+          secondaryRgb: "154, 130, 223",
+          soft: "#ebf8f3",
+          border: "#cce9de",
+        }),
+        neutral: Object.freeze({
+          primary: "#7771a8",
+          primaryRgb: "119, 113, 168",
+          secondary: "#aeb6d2",
+          secondaryRgb: "174, 182, 210",
+          soft: "#f0eff7",
+          border: "#dcddea",
+        }),
+      });
+      const CATEGORY_THEME_KEYS = Object.freeze(
+        Object.keys(CATEGORY_THEME_DEFINITIONS),
+      );
+      const CATEGORY_THEME_BY_ID = Object.freeze({
+        products: "product",
+        presale: "claude",
+        category_user_e7e7c8b6b341433da1bd1f1400712706: "escort",
+        "aftersale-onhold": "onhold",
+        "aftersale-actions": "aftersale",
+        category_user_9fd35d47a97447ec9d65ac5cf509dda1: "environment",
+        category_user_bb86b63c0f6c482f87cf33a022e08c1e: "chatgpt",
+        category_user_2a874296a0af4f64b89a210cd9ff24a0: "invoice",
+        tutorials: "tutorial",
+        training: "training",
+        other: "neutral",
+      });
+      const CATEGORY_THEME_BY_BASE_TITLE = Object.freeze({
+        产品中心: "product",
+        售前: "claude",
+        claude售前话术: "claude",
+        护航版售前环境问题话术: "escort",
+        "售后 · on hold 触发": "onhold",
+        "售后 · 处置动作": "aftersale",
+        环境配置指南: "environment",
+        "ChatGPT pro 售前话术": "chatgpt",
+        建议客户开票话术: "invoice",
+        操作教程: "tutorial",
+        新人培训: "training",
+        其他: "neutral",
+      });
+      function hashCategoryThemeId(categoryId) {
+        let hash = 2166136261;
+        for (const character of String(categoryId || "")) {
+          hash ^= character.charCodeAt(0);
+          hash = Math.imul(hash, 16777619);
+        }
+        return hash >>> 0;
+      }
+      function getCategoryThemeKey(group, index) {
+        const categoryId = getCategoryOrderId(group, index);
+        const baseTitle = String(group?.title || "").trim();
+        return (
+          CATEGORY_THEME_BY_ID[categoryId] ||
+          CATEGORY_THEME_BY_BASE_TITLE[baseTitle] ||
+          CATEGORY_THEME_KEYS[
+            hashCategoryThemeId(categoryId) % CATEGORY_THEME_KEYS.length
+          ]
+        );
+      }
+      function getCategoryTheme(group, index) {
+        const key = getCategoryThemeKey(group, index);
+        return { key, ...CATEGORY_THEME_DEFINITIONS[key] };
+      }
+      function applyCategoryTheme(groupIndex = activeG) {
+        const app = document.querySelector(".app");
+        if (!app) return;
+        const properties = [
+          "--category-primary",
+          "--category-primary-rgb",
+          "--category-secondary",
+          "--category-secondary-rgb",
+          "--category-soft",
+          "--category-border",
+        ];
+        if (mode !== "group" || !groups[groupIndex]) {
+          delete app.dataset.categoryId;
+          delete app.dataset.categoryTheme;
+          properties.forEach((property) => app.style.removeProperty(property));
+          return;
+        }
+        const group = groups[groupIndex];
+        const theme = getCategoryTheme(group, groupIndex);
+        app.dataset.categoryId = getCategoryOrderId(group, groupIndex);
+        app.dataset.categoryTheme = theme.key;
+        app.style.setProperty("--category-primary", theme.primary);
+        app.style.setProperty("--category-primary-rgb", theme.primaryRgb);
+        app.style.setProperty("--category-secondary", theme.secondary);
+        app.style.setProperty("--category-secondary-rgb", theme.secondaryRgb);
+        app.style.setProperty("--category-soft", theme.soft);
+        app.style.setProperty("--category-border", theme.border);
+      }
+      save();
       function loadCategoryOrder() {
         try {
           const parsed = JSON.parse(
@@ -6617,9 +6788,15 @@ const KEY = "zy_kb_system_v2",
           finishGalleryAssetDrag(null, false);
         }
         mode = m;
-        document
-          .querySelector(".app")
-          ?.classList.toggle("gallery-mode", m === "gallery");
+        const app = document.querySelector(".app");
+        app?.classList.toggle("gallery-mode", m === "gallery");
+        app?.classList.toggle("home-mode", m === "home");
+        app?.classList.toggle("category-mode", m === "group");
+        app?.classList.toggle(
+          "home-searching",
+          m === "home" && Boolean($("#q")?.value.trim()),
+        );
+        applyCategoryTheme();
         document
           .querySelectorAll(".navbtn[data-mode]")
           .forEach((x) => x.classList.toggle("on", x.dataset.mode === m));
@@ -6630,9 +6807,10 @@ const KEY = "zy_kb_system_v2",
           .map((gi) => {
             const g = groups[gi];
             const displayName = getCategoryDisplayName(g, gi);
+            const theme = getCategoryTheme(g, gi);
             total += g.items.length;
             const label = `拖动调整“${displayName}”分类顺序`;
-            return `<div class="category-row" data-group-index="${gi}" data-category-id="${esc(getCategoryOrderId(g, gi))}"><button type="button" class="navbtn category-open ${(mode === "group" || mode === "gallery") && gi === activeG ? "on" : ""}" onclick="openGroup(${gi})"><span class="category-name" title="${esc(displayName)}">📁 ${esc(displayName)}</span><em>${g.items.length}</em></button><button type="button" class="category-manage-button" aria-label="重命名分类：${esc(displayName)}" title="重命名分类" onclick="event.preventDefault();event.stopPropagation();openCategoryRenameDialog(${gi})">✎</button><button type="button" class="category-drag-handle" aria-label="${esc(label)}" title="拖动调整分类顺序" aria-grabbed="false" onpointerdown="startCategoryDrag(event,${gi})" onkeydown="handleCategoryHandleKeydown(event,${gi})" onclick="event.preventDefault();event.stopPropagation()">⠿</button></div>`;
+            return `<div class="category-row" data-group-index="${gi}" data-category-id="${esc(getCategoryOrderId(g, gi))}" data-category-theme="${esc(theme.key)}" style="--row-category-primary:${esc(theme.primary)};--row-category-secondary:${esc(theme.secondary)}"><button type="button" class="navbtn category-open ${(mode === "group" || mode === "gallery") && gi === activeG ? "on" : ""}" onclick="openGroup(${gi})"><span class="category-folder" aria-hidden="true"></span><span class="category-name" title="${esc(displayName)}">${esc(displayName)}</span><em>${g.items.length}</em></button><button type="button" class="category-manage-button" aria-label="重命名分类：${esc(displayName)}" title="重命名分类" onclick="event.preventDefault();event.stopPropagation();openCategoryRenameDialog(${gi})">✎</button><button type="button" class="category-drag-handle" aria-label="${esc(label)}" title="拖动调整分类顺序" aria-grabbed="false" onpointerdown="startCategoryDrag(event,${gi})" onkeydown="handleCategoryHandleKeydown(event,${gi})" onclick="event.preventDefault();event.stopPropagation()">⠿</button></div>`;
           })
           .join("");
         $("#favCount").textContent = favs.length;
@@ -6645,22 +6823,38 @@ const KEY = "zy_kb_system_v2",
         });
       }
       
-      
+      function renderHomeDashboardRecords(records, emptyMessage) {
+        if (!records.length) {
+          return `<div class="home-feed-empty">${esc(emptyMessage)}</div>`;
+        }
+        return records
+          .map(
+            (record) =>
+              `<button type="button" class="home-feed-item" onclick="openDoc(${record.gi},${record.ii})"><span class="home-feed-icon" aria-hidden="true">${favs.includes(getContentId(record.gi, record.ii)) ? "★" : "↗"}</span><span><strong>${esc(record.x.title)}</strong><small>${esc(getCategoryDisplayName(record.g, record.gi))}</small></span></button>`,
+          )
+          .join("");
+      }
+
+      function renderRefundCalculator() {
+        return `<section class="refund-calculator" id="refundCalculator" data-calc-type="normal" aria-labelledby="refundCalculatorTitle"><header class="refund-calculator-header"><div><span class="section-kicker">内部核算工具</span><h2 id="refundCalculatorTitle">售后退款计算器</h2><p>选择业务场景并填写订单信息，金额与说明会即时更新。</p></div><span class="calculator-status-pill">30天周期</span></header><div class="refund-calculator-layout"><div class="refund-calculator-form"><fieldset class="calculator-mode-fieldset"><legend>计算模式</legend><input id="ctype" type="hidden" value="normal"><div class="calculator-mode-buttons" role="group" aria-label="退款计算类型"><button type="button" class="calculator-mode-button is-selected" data-calculator-type="normal" aria-pressed="true" onclick="setCalculatorType('normal')"><strong>普通售后</strong><span>扣8%服务费</span></button><button type="button" class="calculator-mode-button" data-calculator-type="onhold" aria-pressed="false" onclick="setCalculatorType('onhold')"><strong>on-hold</strong><span>不扣8% · 剩余金额各承担一半</span></button><button type="button" class="calculator-mode-button" data-calculator-type="legacy_onhold" aria-pressed="false" onclick="setCalculatorType('legacy_onhold')"><strong>原风险共担</strong><span>保留原有扣8%公式</span></button><button type="button" class="calculator-mode-button" data-calculator-type="kyc" aria-pressed="false" onclick="setCalculatorType('kyc')"><strong>KYC</strong><span>销售价减官方成本后按天</span></button></div></fieldset><div class="calculator-input-grid"><label class="field"><span>订单金额（元）</span><input id="price" type="number" min="0" step="0.01" inputmode="decimal" value="499" oninput="calc()"></label><label class="field"><span>已使用天数</span><input id="days" type="number" min="0" max="30" step="1" inputmode="numeric" value="10" oninput="calc()"></label><label class="field calculator-cost-field is-disabled"><span>官方订阅成本（仅KYC）</span><input id="cost" type="number" min="0" step="0.01" inputmode="decimal" value="150" disabled oninput="calc()"></label></div><p class="calculator-validation" id="calcValidation" role="status" aria-live="polite"></p><div class="calculator-notice"><span aria-hidden="true">i</span><p>内部核算使用。对客户仅告知最终金额，不直接展示内部计算公式。</p></div></div><section class="refund-result-card" aria-labelledby="refundResultTitle"><div class="refund-result-copy"><span id="refundResultTitle">预计退款金额</span><strong id="amount">¥0.00</strong><p id="formula"></p><div class="calculator-breakdown" id="calcDetails"></div></div><div class="calculator-illustration" aria-hidden="true"><svg viewBox="0 0 220 180" role="img"><defs><linearGradient id="calculatorBodyGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6859df"/><stop offset="1" stop-color="#4f8ee8"/></linearGradient><linearGradient id="coinGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd56a"/><stop offset="1" stop-color="#f3a93b"/></linearGradient></defs><rect x="25" y="18" width="122" height="145" rx="24" fill="url(#calculatorBodyGradient)"/><rect x="43" y="37" width="86" height="35" rx="9" fill="#f5f7ff"/><rect x="45" y="88" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="76" y="88" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="107" y="88" width="19" height="19" rx="6" fill="#f2b9ce"/><rect x="45" y="119" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="76" y="119" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="107" y="119" width="19" height="19" rx="6" fill="#f7d596"/><ellipse cx="169" cy="135" rx="34" ry="12" fill="#d58c28" opacity=".22"/><circle cx="171" cy="111" r="28" fill="url(#coinGradient)"/><circle cx="171" cy="111" r="19" fill="none" stroke="#fff1b6" stroke-width="3"/><path d="M171 98v26M164 103h11a6 6 0 0 1 0 12h-8a6 6 0 0 0 0 12h12" fill="none" stroke="#fff8d9" stroke-width="4" stroke-linecap="round"/></svg></div></section></div></section>`;
+      }
+
       function showHome() {
         activeArticleVisible = false;
         editing = false;
         setMode("home");
         renderNav();
-        let docs = allDocs();
-        renderList(
-          recent
-            .slice(0, 6)
-            .map((k) => resolveStoredIdRecord(k))
-            .filter(Boolean),
-          "最近使用",
-        );
+        const recentRecords = recent
+          .slice(0, 6)
+          .map((key) => resolveStoredIdRecord(key))
+          .filter(Boolean);
+        const favoriteRecords = favs
+          .slice(0, 6)
+          .map((key) => resolveStoredIdRecord(key))
+          .filter(Boolean);
+        renderList(recentRecords, "最近使用");
         $("#main").innerHTML =
-          `<div class="dashboard"><div class="hero"><h1>智源客服知识库</h1><p>统一管理客服话术、产品资料、售后规则和新人培训内容。</p></div><div class="stats"><div class="stat"><b>${groups.length}</b><span>知识分类</span></div><div class="stat"><b>${docs.length}</b><span>话术与文档</span></div><div class="stat"><b>${favs.length}</b><span>收藏内容</span></div><div class="stat"><b>${recent.length}</b><span>最近使用</span></div></div><div class="dashgrid"><div class="panel"><h3>常用入口</h3><div class="quick"><button onclick="jump('售前')">💬 售前话术<br><small>版本、价格、购买说明</small></button><button onclick="jump('售后 · on hold 触发')">⚠️ on hold<br><small>复核、申诉与后续方案</small></button><button onclick="jump('售后 · 处置动作')">💰 售后处置<br><small>退款、补差、升级</small></button><button onclick="jump('新人培训')">🎓 新人培训<br><small>阅读顺序与检查清单</small></button></div></div><div class="panel"><h3>售后退款计算器</h3><div class="calcgrid"><div class="field"><label>计算类型</label><select id="ctype" onchange="calc()"><option value="normal">普通售后：8%＋已用天数</option><option value="onhold">on hold：未使用净额五五分</option><option value="kyc">KYC：销售价减官方成本后按天</option></select></div><div class="field"><label>订单金额（元）</label><input id="price" type="number" value="499" oninput="calc()"></div><div class="field"><label>已使用天数</label><input id="days" type="number" min="0" max="30" value="10" oninput="calc()"></div><div class="field"><label>官方订阅成本（仅 KYC）</label><input id="cost" type="number" value="150" oninput="calc()"></div></div><div class="result">预计退款：<b id="amount">¥0.00</b><div id="formula"></div></div><div class="notice">内部核算工具。对客户仅告知最终金额，不直接展示内部计算公式。</div></div></div></div>`;
+          `<div class="dashboard"><header class="dashboard-heading"><div><span class="section-kicker">客服工作台</span><h1>智源客服知识库</h1><p>统一管理客服话术、产品资料、售后规则和新人培训内容。</p></div><span class="dashboard-date">知识与核算，一站处理</span></header>${renderRefundCalculator()}<section class="home-feed-grid" aria-label="常用知识动态"><section class="home-feed-card" aria-labelledby="homeRecentTitle"><header><div><span class="home-feed-eyebrow">RECENT</span><h2 id="homeRecentTitle">最近使用</h2></div><button type="button" onclick="showRecent()">查看全部</button></header><div class="home-feed-list">${renderHomeDashboardRecords(recentRecords, "暂时没有最近使用内容")}</div></section><section class="home-feed-card favorites" aria-labelledby="homeFavoriteTitle"><header><div><span class="home-feed-eyebrow">FAVORITES</span><h2 id="homeFavoriteTitle">收藏内容</h2></div><button type="button" onclick="showFavs()">查看全部</button></header><div class="home-feed-list">${renderHomeDashboardRecords(favoriteRecords, "还没有收藏内容，可在文章页点击收藏")}</div></section></section></div>`;
         calc();
         persistUiState();
       }
@@ -7089,7 +7283,11 @@ const KEY = "zy_kb_system_v2",
         }
       }
       $("#q").addEventListener("input", () => {
-        if ($("#q").value.trim()) renderList(allDocs(), "全局搜索");
+        const hasQuery = Boolean($("#q").value.trim());
+        document
+          .querySelector(".app")
+          ?.classList.toggle("home-searching", mode === "home" && hasQuery);
+        if (hasQuery) renderList(allDocs(), "全局搜索");
         else if (mode === "home") showHome();
         else if (mode === "fav") showFavs();
         else if (mode === "recent") showRecent();
