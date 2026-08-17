@@ -2941,6 +2941,19 @@
         justify-content: flex-end;
         margin-top: 20px;
       }
+      .btn.category-delete-button {
+        margin-right: auto;
+        border-color: #dc3545;
+        background: #dc3545;
+        color: #fff;
+      }
+      .btn.category-delete-button:hover,
+      .btn.category-delete-button:focus-visible {
+        border-color: #b42331;
+        outline: none;
+        background: #b42331;
+        color: #fff;
+      }
       .move-dialog footer .btn:disabled {
         cursor: not-allowed;
         opacity: 0.5;

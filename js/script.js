@@ -5751,7 +5751,7 @@ const KEY = "zy_kb_system_v2",
         backdrop.className = "move-dialog-backdrop category-rename-backdrop";
         backdrop.hidden = true;
         backdrop.setAttribute("aria-hidden", "true");
-        backdrop.innerHTML = `<section class="move-dialog category-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="categoryRenameTitle"><header><h2 id="categoryRenameTitle">重命名分类</h2><button type="button" class="move-dialog-close" aria-label="关闭重命名分类窗口" title="关闭" onclick="closeCategoryRenameDialog()">×</button></header><div class="move-dialog-summary"><span>当前分类名称</span><strong id="categoryRenameCurrentName"></strong></div><label class="move-dialog-field"><span>新分类名称</span><input id="categoryRenameInput" type="text" maxlength="80" autocomplete="off" aria-describedby="categoryRenameError" oninput="updateCategoryRenameConfirm()" onkeydown="handleCategoryRenameKeydown(event)"></label><p class="category-rename-error" id="categoryRenameError" role="alert" aria-live="polite"></p><footer><button type="button" class="btn" onclick="closeCategoryRenameDialog()">取消</button><button type="button" class="btn primary" id="confirmCategoryRename" onclick="confirmCategoryRename()">确认修改</button></footer></section>`;
+        backdrop.innerHTML = `<section class="move-dialog category-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="categoryRenameTitle"><header><h2 id="categoryRenameTitle">编辑分类</h2><button type="button" class="move-dialog-close" aria-label="关闭分类编辑窗口" title="关闭" onclick="closeCategoryRenameDialog()">×</button></header><div class="move-dialog-summary"><span>当前分类名称</span><strong id="categoryRenameCurrentName"></strong></div><label class="move-dialog-field"><span>新分类名称</span><input id="categoryRenameInput" type="text" maxlength="80" autocomplete="off" aria-describedby="categoryRenameError" oninput="updateCategoryRenameConfirm()" onkeydown="handleCategoryRenameKeydown(event)"></label><p class="category-rename-error" id="categoryRenameError" role="alert" aria-live="polite"></p><footer><button type="button" class="btn danger category-delete-button" onclick="deleteCategoryFromDialog()">删除分类</button><button type="button" class="btn" onclick="closeCategoryRenameDialog()">取消</button><button type="button" class="btn primary" id="confirmCategoryRename" onclick="confirmCategoryRename()">确认修改</button></footer></section>`;
         backdrop.addEventListener("click", (event) => {
           if (event.target === backdrop) closeCategoryRenameDialog();
         });
@@ -5890,6 +5890,61 @@ const KEY = "zy_kb_system_v2",
         closeCategoryRenameDialog();
         refreshCategoryNameDisplays();
         toast("分类名称已更新");
+      }
+      function deleteCategoryFromDialog() {
+        const backdrop = $("#categoryRenameDialog");
+        const categoryId = String(backdrop?.dataset.categoryId || "");
+        const groupIndex = findGroupIndexByCategoryId(categoryId);
+        const group = groups[groupIndex];
+        if (!backdrop || backdrop.hidden || !group) return;
+        if (group.items.length > 0) {
+          alert(
+            "该分类下还有内容，请先将内容移动到其他分类或删除后再操作",
+          );
+          return;
+        }
+        const categoryName = getCategoryDisplayName(group, groupIndex);
+        if (!confirm(`确定删除分类“${categoryName}”吗？`)) return;
+
+        const selectedCategoryId =
+          mode === "group" || mode === "gallery"
+            ? getCategoryOrderId(groups[activeG], activeG)
+            : "";
+        groups.splice(groupIndex, 1);
+
+        const nextNameOverrides = { ...categoryNameOverrides };
+        delete nextNameOverrides[categoryId];
+        persistCategoryNameOverrides(nextNameOverrides);
+
+        const nextArticleOrder = { ...articleOrder };
+        delete nextArticleOrder[categoryId];
+        persistArticleOrder(nextArticleOrder);
+
+        articleCategoryOverrides = Object.fromEntries(
+          Object.entries(articleCategoryOverrides).filter(
+            ([, record]) =>
+              record.source_category_id !== categoryId &&
+              record.target_category_id !== categoryId,
+          ),
+        );
+        persistArticleCategoryOverrides();
+        persistCategoryOrder(getOrderedGroupIndexes());
+
+        closeCategoryRenameDialog();
+        save();
+        if (selectedCategoryId === categoryId) {
+          showHome();
+        } else {
+          activeG = Math.max(
+            0,
+            findGroupIndexByCategoryId(selectedCategoryId),
+          );
+          refreshCategoryNameDisplays();
+          if (mode === "group" && activeArticleVisible) renderDoc();
+          if (mode === "gallery") renderPriceGallery();
+          persistUiState();
+        }
+        toast(`分类“${categoryName}”已删除`);
       }
       function normalizeArticleOrderIds(values) {
         if (!Array.isArray(values)) return [];
@@ -6810,7 +6865,7 @@ const KEY = "zy_kb_system_v2",
             const theme = getCategoryTheme(g, gi);
             total += g.items.length;
             const label = `拖动调整“${displayName}”分类顺序`;
-            return `<div class="category-row" data-group-index="${gi}" data-category-id="${esc(getCategoryOrderId(g, gi))}" data-category-theme="${esc(theme.key)}" style="--row-category-primary:${esc(theme.primary)};--row-category-secondary:${esc(theme.secondary)}"><button type="button" class="navbtn category-open ${(mode === "group" || mode === "gallery") && gi === activeG ? "on" : ""}" onclick="openGroup(${gi})"><span class="category-folder" aria-hidden="true"></span><span class="category-name" title="${esc(displayName)}">${esc(displayName)}</span><em>${g.items.length}</em></button><button type="button" class="category-manage-button" aria-label="重命名分类：${esc(displayName)}" title="重命名分类" onclick="event.preventDefault();event.stopPropagation();openCategoryRenameDialog(${gi})">✎</button><button type="button" class="category-drag-handle" aria-label="${esc(label)}" title="拖动调整分类顺序" aria-grabbed="false" onpointerdown="startCategoryDrag(event,${gi})" onkeydown="handleCategoryHandleKeydown(event,${gi})" onclick="event.preventDefault();event.stopPropagation()">⠿</button></div>`;
+            return `<div class="category-row" data-group-index="${gi}" data-category-id="${esc(getCategoryOrderId(g, gi))}" data-category-theme="${esc(theme.key)}" style="--row-category-primary:${esc(theme.primary)};--row-category-secondary:${esc(theme.secondary)}"><button type="button" class="navbtn category-open ${(mode === "group" || mode === "gallery") && gi === activeG ? "on" : ""}" onclick="openGroup(${gi})"><span class="category-folder" aria-hidden="true"></span><span class="category-name" title="${esc(displayName)}">${esc(displayName)}</span><em>${g.items.length}</em></button><button type="button" class="category-manage-button" aria-label="编辑分类：${esc(displayName)}" title="编辑分类" onclick="event.preventDefault();event.stopPropagation();openCategoryRenameDialog(${gi})">✎</button><button type="button" class="category-drag-handle" aria-label="${esc(label)}" title="拖动调整分类顺序" aria-grabbed="false" onpointerdown="startCategoryDrag(event,${gi})" onkeydown="handleCategoryHandleKeydown(event,${gi})" onclick="event.preventDefault();event.stopPropagation()">⠿</button></div>`;
           })
           .join("");
         $("#favCount").textContent = favs.length;
