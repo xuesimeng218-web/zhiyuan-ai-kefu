@@ -63,6 +63,8 @@ const KEY = "zy_kb_system_v2",
         status: customerCodeStoreState.ok ? "idle" : "storage-error",
         message: customerCodeStoreState.message,
       };
+      let customerCodeEditingCode = "";
+      let customerCodeSortMode = "code-asc";
       const GALLERY_PRODUCTS = [
         "ChatGPT",
         "Claude",
@@ -147,6 +149,26 @@ const KEY = "zy_kb_system_v2",
         return [...records].sort(
           (a, b) => Number(a.code.slice(1)) - Number(b.code.slice(1)),
         );
+      }
+      function sortCustomerCodeRecordsForView(records) {
+        const codeCompare = (a, b) =>
+          Number(a.code.slice(1)) - Number(b.code.slice(1));
+        const timeCompare = (a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        if (customerCodeSortMode === "time-desc") {
+          return [...records].sort((a, b) => timeCompare(b, a) || codeCompare(a, b));
+        }
+        if (customerCodeSortMode === "time-asc") {
+          return [...records].sort((a, b) => timeCompare(a, b) || codeCompare(a, b));
+        }
+        return [...records].sort(codeCompare);
+      }
+      function setCustomerCodeSortMode(value) {
+        const allowed = new Set(["code-asc", "time-desc", "time-asc"]);
+        const nextMode = allowed.has(value) ? value : "code-asc";
+        if (customerCodeSortMode === nextMode) return;
+        customerCodeSortMode = nextMode;
+        renderCustomerCodeManager();
       }
       function loadCustomerCodeStore() {
         let raw;
@@ -7260,6 +7282,31 @@ const KEY = "zy_kb_system_v2",
           hour12: false,
         });
       }
+      function formatCustomerCodeDateInput(value) {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "";
+        const two = (part) => String(part).padStart(2, "0");
+        return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}`;
+      }
+      function parseCustomerCodeDateInput(value) {
+        const match =
+          /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(
+            String(value ?? ""),
+          );
+        if (!match) return null;
+        const [, year, month, day, hour, minute] = match.map(Number);
+        const date = new Date(year, month - 1, day, hour, minute);
+        if (
+          date.getFullYear() !== year ||
+          date.getMonth() !== month - 1 ||
+          date.getDate() !== day ||
+          date.getHours() !== hour ||
+          date.getMinutes() !== minute
+        ) {
+          return null;
+        }
+        return date.toISOString();
+      }
       function isCustomerCodeAddedToday(value) {
         const date = new Date(value);
         const today = new Date();
@@ -7291,28 +7338,62 @@ const KEY = "zy_kb_system_v2",
           return '<div class="customer-code-empty">暂无客户编码</div>';
         }
         return records
-          .map(
-            (record) =>
-              `<article class="customer-code-row"><strong class="customer-code-value">${esc(record.code)}</strong><span class="customer-code-status is-recorded">已录入</span><time datetime="${esc(record.createdAt)}">${esc(formatCustomerCodeDate(record.createdAt))}</time><div class="customer-code-row-actions"><button type="button" class="btn" onclick="copyText('${esc(record.code)}')">复制</button><button type="button" class="btn danger" onclick="deleteCustomerCode('${esc(record.code)}')">删除</button></div></article>`,
-          )
+          .map((record) => {
+            const isEditing = customerCodeEditingCode === record.code;
+            if (isEditing) {
+              return `<article class="customer-code-row is-editing" data-customer-code="${esc(record.code)}"><form class="customer-code-record-edit" onsubmit="saveCustomerCodeRecord(event, '${esc(record.code)}')"><label><span>客户编码</span><input id="customerCodeEditCodeInput" name="code" type="text" value="${esc(record.code)}" autocomplete="off" autocapitalize="none" spellcheck="false" required aria-label="客户编码"></label><label><span>录入时间</span><input name="createdAt" type="datetime-local" value="${esc(formatCustomerCodeDateInput(record.createdAt))}" step="60" required aria-label="${esc(record.code)} 的录入时间"></label><div class="customer-code-edit-actions"><button type="submit" class="btn primary">保存</button><button type="button" class="btn" onclick="cancelCustomerCodeRecordEdit()">取消</button></div></form></article>`;
+            }
+            return `<article class="customer-code-row" data-customer-code="${esc(record.code)}"><strong class="customer-code-value">${esc(record.code)}</strong><div class="customer-code-row-actions"><button type="button" class="btn customer-code-icon-button customer-code-edit-button" onclick="editCustomerCodeRecord('${esc(record.code)}')" aria-label="编辑 ${esc(record.code)}" title="编辑"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4ZM13.5 6.5l4 4"/></svg></button><button type="button" class="btn danger customer-code-icon-button" onclick="deleteCustomerCode('${esc(record.code)}')" aria-label="删除 ${esc(record.code)}" title="删除"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m-9 0 1 13h10l1-13M10 11v5m4-5v5"/></svg></button></div><span class="customer-code-status is-recorded">已录入</span><div class="customer-code-time-row"><time datetime="${esc(record.createdAt)}">${esc(formatCustomerCodeDate(record.createdAt))}</time></div></article>`;
+          })
           .join("");
       }
+      function handleCustomerCodeOutsideClick(event) {
+        if (mode !== "customer-codes") return;
+        const target =
+          event.target instanceof Element ? event.target : null;
+        if (!target) return;
+        let shouldRender = false;
+        if (
+          customerCodeSearchState.status !== "idle" &&
+          !target.closest(".customer-code-search-panel")
+        ) {
+          customerCodeSearchState = {
+            ...customerCodeSearchState,
+            status: "idle",
+            message: "",
+          };
+          shouldRender = true;
+        }
+        if (customerCodeEditingCode) {
+          const clickedRow = target.closest(".customer-code-row");
+          const clickedCurrentRow =
+            clickedRow?.dataset.customerCode === customerCodeEditingCode;
+          const clickedEditButton = target.closest(
+            ".customer-code-edit-button",
+          );
+          if (!clickedCurrentRow && !clickedEditButton) {
+            customerCodeEditingCode = "";
+            shouldRender = true;
+          }
+        }
+        if (shouldRender) renderCustomerCodeManager();
+      }
       function renderCustomerCodeManager() {
-        const records = customerCodeStoreState.ok
-          ? sortCustomerCodeRecords(customerCodes)
-          : [];
-        const todayCount = records.filter((record) =>
+        const baseRecords = customerCodeStoreState.ok ? customerCodes : [];
+        const records = sortCustomerCodeRecordsForView(baseRecords);
+        const todayCount = baseRecords.filter((record) =>
           isCustomerCodeAddedToday(record.createdAt),
         ).length;
         const storageWarning = customerCodeStoreState.ok
           ? ""
           : `<p class="customer-code-storage-warning" role="alert">${esc(customerCodeStoreState.message)}</p>`;
         $("#main").innerHTML =
-          `<div class="customer-code-page"><header class="customer-code-page-header"><div><span class="section-kicker">CUSTOMER CODE</span><h1>客户编码管理</h1><p>严格按 C＋6位数字查询并管理客户编码。</p></div><div class="customer-code-page-actions"><button type="button" class="btn" onclick="exportCustomerCodes()">导出编码</button><button type="button" class="btn" onclick="selectCustomerCodeBackupFile()">导入编码</button><button type="button" class="btn" onclick="showHome()">返回首页</button><input id="customerCodeBackupInput" type="file" accept="application/json,.json" aria-label="选择客户编码备份文件" hidden onchange="handleCustomerCodeBackupInput(event)"></div></header><section class="customer-code-search-panel" aria-label="客户编码查询"><form class="customer-code-search-form" onsubmit="handleCustomerCodeSearch(event)"><label for="customerCodeManagerInput">客户编码</label><div><input id="customerCodeManagerInput" type="text" value="${esc(customerCodeSearchState.query)}" placeholder="输入客户编码" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="submit" class="btn primary">查询</button></div><small>格式：大写字母 C＋6位数字，例如 C000006</small></form>${renderCustomerCodeSearchResult()}${storageWarning}</section><section class="customer-code-stats" aria-label="客户编码统计"><article><span>全部编码</span><strong>${records.length}</strong></article><article><span>今日新增</span><strong>${todayCount}</strong></article></section><section class="customer-code-list-panel" aria-labelledby="customerCodeListTitle"><header><div><span class="section-kicker">RECORDS</span><h2 id="customerCodeListTitle">客户编码列表</h2></div><span>按数字部分升序排列</span></header><div class="customer-code-list">${renderCustomerCodeRows(records)}</div></section></div>`;
+          `<div class="customer-code-page"><header class="customer-code-page-header"><div><span class="section-kicker">CUSTOMER CODE</span><h1>客户编码管理</h1><p>严格按 C＋6位数字查询并管理客户编码。</p></div><div class="customer-code-page-actions"><button type="button" class="btn" onclick="exportCustomerCodes()">导出编码</button><button type="button" class="btn" onclick="selectCustomerCodeBackupFile()">导入编码</button><button type="button" class="btn" onclick="showHome()">返回首页</button><input id="customerCodeBackupInput" type="file" accept="application/json,.json" aria-label="选择客户编码备份文件" hidden onchange="handleCustomerCodeBackupInput(event)"></div></header><section class="customer-code-search-panel" aria-label="客户编码查询"><form class="customer-code-search-form" onsubmit="handleCustomerCodeSearch(event)"><label for="customerCodeManagerInput">客户编码</label><div><input id="customerCodeManagerInput" type="text" value="${esc(customerCodeSearchState.query)}" placeholder="输入客户编码" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="submit" class="btn primary">查询</button><button type="button" class="btn customer-code-clear-button" onclick="clearCustomerCodeSearch()">清除</button></div><small>格式：大写字母 C＋6位数字，例如 C000006</small></form>${renderCustomerCodeSearchResult()}${storageWarning}</section><section class="customer-code-stats" aria-label="客户编码统计"><article><span>全部编码</span><strong>${baseRecords.length}</strong></article><article><span>今日新增</span><strong>${todayCount}</strong></article></section><section class="customer-code-list-panel" aria-labelledby="customerCodeListTitle"><header><div><span class="section-kicker">RECORDS</span><h2 id="customerCodeListTitle">客户编码列表</h2></div><select class="customer-code-sort-select" aria-label="排列顺序" onchange="setCustomerCodeSortMode(this.value)"><option value="code-asc"${customerCodeSortMode === "code-asc" ? " selected" : ""}>按客户编码升序</option><option value="time-desc"${customerCodeSortMode === "time-desc" ? " selected" : ""}>按时间顺序（最近在前）</option><option value="time-asc"${customerCodeSortMode === "time-asc" ? " selected" : ""}>按时间顺序（最早在前）</option></select></header><div class="customer-code-list">${renderCustomerCodeRows(records)}</div></section></div>`;
       }
       function showCustomerCodeManager(query = null) {
         activeArticleVisible = false;
         editing = false;
+        customerCodeEditingCode = "";
         setMode("customer-codes");
         renderNav();
         if (query === null) {
@@ -7338,6 +7419,17 @@ const KEY = "zy_kb_system_v2",
         updateCustomerCodeSearchState($("#customerCodeManagerInput")?.value ?? "");
         renderCustomerCodeManager();
         persistUiState();
+      }
+      function clearCustomerCodeSearch() {
+        customerCodeSearchState = {
+          query: "",
+          status: customerCodeStoreState.ok ? "idle" : "storage-error",
+          message: customerCodeStoreState.ok
+            ? ""
+            : customerCodeStoreState.message,
+        };
+        renderCustomerCodeManager();
+        $("#customerCodeManagerInput")?.focus();
       }
       function addCustomerCode(code) {
         const raw = String(code ?? "");
@@ -7392,6 +7484,118 @@ const KEY = "zy_kb_system_v2",
         persistUiState();
         toast("客户编码已新增");
       }
+      function editCustomerCodeRecord(code) {
+        const raw = String(code ?? "");
+        if (!CUSTOMER_CODE_PATTERN.test(raw)) return;
+        const latest = refreshCustomerCodeStore();
+        if (!latest.ok) {
+          customerCodeSearchState = {
+            query: raw,
+            status: "storage-error",
+            message: latest.message,
+          };
+          renderCustomerCodeManager();
+          return;
+        }
+        if (!latest.records.some((record) => record.code === raw)) return;
+        customerCodeEditingCode = raw;
+        renderCustomerCodeManager();
+        const codeInput = $("#customerCodeEditCodeInput");
+        codeInput?.focus();
+        codeInput?.select();
+      }
+      function cancelCustomerCodeRecordEdit() {
+        customerCodeEditingCode = "";
+        renderCustomerCodeManager();
+      }
+      function saveCustomerCodeRecord(event, originalCode) {
+        event.preventDefault();
+        const rawOriginal = String(originalCode ?? "");
+        if (
+          !CUSTOMER_CODE_PATTERN.test(rawOriginal) ||
+          customerCodeEditingCode !== rawOriginal
+        ) {
+          return;
+        }
+        const form = event.currentTarget;
+        const codeInput = form?.elements?.namedItem("code");
+        const timeInput = form?.elements?.namedItem("createdAt");
+        const nextCode = String(codeInput?.value ?? "");
+        const createdAt = parseCustomerCodeDateInput(timeInput?.value);
+
+        if (!CUSTOMER_CODE_PATTERN.test(nextCode)) {
+          codeInput?.setCustomValidity("客户编码格式错误，请输入大写字母 C＋6位数字");
+          codeInput?.reportValidity();
+          codeInput?.focus();
+          return;
+        }
+        codeInput?.setCustomValidity("");
+        if (!createdAt) {
+          timeInput?.setCustomValidity("请输入有效的日期和时间");
+          timeInput?.reportValidity();
+          timeInput?.focus();
+          return;
+        }
+        timeInput?.setCustomValidity("");
+
+        const latest = refreshCustomerCodeStore();
+        if (!latest.ok) {
+          customerCodeSearchState = {
+            query: rawOriginal,
+            status: "storage-error",
+            message: latest.message,
+          };
+          renderCustomerCodeManager();
+          return;
+        }
+        if (!latest.records.some((record) => record.code === rawOriginal)) {
+          customerCodeEditingCode = "";
+          customerCodeSearchState = {
+            query: rawOriginal,
+            status: "missing",
+            message: "该编码已不存在",
+          };
+          renderCustomerCodeManager();
+          toast("该编码已不存在");
+          return;
+        }
+        if (
+          nextCode !== rawOriginal &&
+          latest.records.some((record) => record.code === nextCode)
+        ) {
+          codeInput?.setCustomValidity("该客户编码已存在");
+          codeInput?.reportValidity();
+          codeInput?.focus();
+          return;
+        }
+
+        const saved = persistCustomerCodeRecords(
+          latest.records.map((record) =>
+            record.code === rawOriginal
+              ? { ...record, code: nextCode, createdAt }
+              : record,
+          ),
+          latest.document,
+        );
+        if (!saved.ok) {
+          customerCodeSearchState = {
+            query: rawOriginal,
+            status: "save-error",
+            message: saved.message,
+          };
+          renderCustomerCodeManager();
+          return;
+        }
+        if (customerCodeSearchState.query === rawOriginal) {
+          customerCodeSearchState = {
+            ...customerCodeSearchState,
+            query: nextCode,
+          };
+        }
+        customerCodeEditingCode = "";
+        renderCustomerCodeManager();
+        toast("客户编码信息已更新");
+      }
       function deleteCustomerCode(code) {
         const raw = String(code ?? "");
         if (!CUSTOMER_CODE_PATTERN.test(raw)) return;
@@ -7434,6 +7638,7 @@ const KEY = "zy_kb_system_v2",
           status: "missing",
           message: "已删除",
         };
+        if (customerCodeEditingCode === raw) customerCodeEditingCode = "";
         renderCustomerCodeManager();
         persistUiState();
         toast("客户编码已删除");
@@ -7917,6 +8122,7 @@ const KEY = "zy_kb_system_v2",
       document.addEventListener("click", (event) => {
         if (!event.target.closest(".gallery-more")) closeGalleryMenus();
       });
+      document.addEventListener("click", handleCustomerCodeOutsideClick);
       window.addEventListener("resize", () => closeGalleryMenus());
       window.addEventListener("resize", updateCategoryScrollControls);
       document.addEventListener("pointermove", handleCategoryPointerMove, {
