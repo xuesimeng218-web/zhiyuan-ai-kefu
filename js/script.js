@@ -20,6 +20,9 @@ const KEY = "zy_kb_system_v2",
         DATA_BACKUP_KEY = "zy_kb_system_v2_pre_document_pack_backup",
         DATA_VERSION = "document-pack-2026-07-22";
       const CUSTOMER_CODE_PATTERN = /^C\d{6}$/;
+      const CUSTOMER_CODE_BACKUP_TYPE = "zy-kb-customer-codes-backup";
+      const CUSTOMER_CODE_BACKUP_VERSION = 1;
+      const CUSTOMER_CODE_BACKUP_MAX_BYTES = 5 * 1024 * 1024;
       const storedGroupsRaw = localStorage.getItem(KEY);
       const storedGroups = JSON.parse(storedGroupsRaw || "null");
       let needsDataVersionWrite =
@@ -247,6 +250,210 @@ const KEY = "zy_kb_system_v2",
         };
         customerCodes = sorted;
         return { ok: true, message: "" };
+      }
+      function customerCodeBackupFilename(date = new Date()) {
+        const two = (value) => String(value).padStart(2, "0");
+        return `customer-codes-backup-${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}.json`;
+      }
+      function exportCustomerCodes() {
+        const latest = refreshCustomerCodeStore();
+        if (!latest.ok) {
+          customerCodeSearchState = {
+            query: "",
+            status: "storage-error",
+            message: latest.message,
+          };
+          renderCustomerCodeManager();
+          alert(`${latest.message}，未导出任何数据。`);
+          return;
+        }
+        const backup = {
+          backupType: CUSTOMER_CODE_BACKUP_TYPE,
+          version: CUSTOMER_CODE_BACKUP_VERSION,
+          exportedAt: new Date().toISOString(),
+          records: latest.records.map((record) => ({
+            code: record.code,
+            createdAt: record.createdAt,
+          })),
+        };
+        download(
+          customerCodeBackupFilename(),
+          JSON.stringify(backup, null, 2),
+        );
+        toast(`客户编码已导出，共${backup.records.length}条`);
+      }
+      function validateCustomerCodeBackupDocument(value) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw new Error("客户编码备份文件类型不正确，已停止导入。");
+        }
+        if (value.backupType !== CUSTOMER_CODE_BACKUP_TYPE) {
+          throw new Error("这不是客户编码备份文件，已停止导入。");
+        }
+        if (value.version !== CUSTOMER_CODE_BACKUP_VERSION) {
+          throw new Error("客户编码备份版本不受支持，已停止导入。");
+        }
+        if (
+          typeof value.exportedAt !== "string" ||
+          Number.isNaN(Date.parse(value.exportedAt))
+        ) {
+          throw new Error("客户编码备份导出时间无效，已停止导入。");
+        }
+        if (!Array.isArray(value.records)) {
+          throw new Error("客户编码备份 records 数据不正确，已停止导入。");
+        }
+        return value.records;
+      }
+      function analyzeCustomerCodeBackupRecords(records, existingRecords) {
+        const seen = new Set(existingRecords.map((record) => record.code));
+        const additions = [];
+        let duplicateCount = 0;
+        let errorCount = 0;
+        let invalidCodeCount = 0;
+        let invalidTimeCount = 0;
+        for (const record of records) {
+          if (
+            !record ||
+            typeof record !== "object" ||
+            Array.isArray(record) ||
+            typeof record.code !== "string" ||
+            !CUSTOMER_CODE_PATTERN.test(record.code)
+          ) {
+            errorCount += 1;
+            invalidCodeCount += 1;
+            continue;
+          }
+          if (
+            typeof record.createdAt !== "string" ||
+            Number.isNaN(Date.parse(record.createdAt))
+          ) {
+            errorCount += 1;
+            invalidTimeCount += 1;
+            continue;
+          }
+          if (seen.has(record.code)) {
+            duplicateCount += 1;
+            continue;
+          }
+          seen.add(record.code);
+          additions.push({
+            code: record.code,
+            createdAt: record.createdAt,
+          });
+        }
+        return {
+          additions,
+          duplicateCount,
+          errorCount,
+          invalidCodeCount,
+          invalidTimeCount,
+        };
+      }
+      function customerCodeImportSummaryText(summary, prefix = "导入统计") {
+        const details = [];
+        if (summary.invalidCodeCount) {
+          details.push(`编码格式错误：${summary.invalidCodeCount}条`);
+        }
+        if (summary.invalidTimeCount) {
+          details.push(`录入时间无效：${summary.invalidTimeCount}条`);
+        }
+        return `${prefix}\n\n新增：${summary.additions.length}条\n重复：${summary.duplicateCount}条\n错误：${summary.errorCount}条${details.length ? `\n${details.join("\n")}` : ""}`;
+      }
+      function customerCodeImportSummarySignature(summary) {
+        return JSON.stringify({
+          additions: summary.additions,
+          duplicateCount: summary.duplicateCount,
+          errorCount: summary.errorCount,
+          invalidCodeCount: summary.invalidCodeCount,
+          invalidTimeCount: summary.invalidTimeCount,
+        });
+      }
+      function selectCustomerCodeBackupFile() {
+        $("#customerCodeBackupInput")?.click();
+      }
+      function handleCustomerCodeBackupInput(event) {
+        const input = event.currentTarget;
+        const file = input.files?.[0];
+        input.value = "";
+        if (file) importCustomerCodeBackup(file);
+      }
+      async function importCustomerCodeBackup(file) {
+        try {
+          if (!/\.json$/i.test(file.name || "")) {
+            throw new Error("请选择 JSON 格式的客户编码备份文件。");
+          }
+          if (file.size > CUSTOMER_CODE_BACKUP_MAX_BYTES) {
+            throw new Error("客户编码备份文件超过5MB，已停止导入。");
+          }
+          let parsed;
+          try {
+            parsed = JSON.parse(await file.text());
+          } catch (error) {
+            throw new Error("客户编码备份文件损坏或无法解析，已停止导入。");
+          }
+          const importedRecords = validateCustomerCodeBackupDocument(parsed);
+          let latest = refreshCustomerCodeStore();
+          if (!latest.ok) {
+            throw new Error(`${latest.message}，未写入任何数据。`);
+          }
+          let summary = analyzeCustomerCodeBackupRecords(
+            importedRecords,
+            latest.records,
+          );
+          if (
+            !confirm(
+              `${customerCodeImportSummaryText(summary)}\n\n确认安全合并吗？现有编码不会被覆盖或删除。`,
+            )
+          ) {
+            toast("已取消导入，未写入任何数据");
+            return;
+          }
+          const confirmedSignature = customerCodeImportSummarySignature(summary);
+          latest = refreshCustomerCodeStore();
+          if (!latest.ok) {
+            throw new Error(`${latest.message}，未写入任何数据。`);
+          }
+          summary = analyzeCustomerCodeBackupRecords(
+            importedRecords,
+            latest.records,
+          );
+          if (
+            customerCodeImportSummarySignature(summary) !== confirmedSignature &&
+            !confirm(
+              `${customerCodeImportSummaryText(summary, "客户编码数据已变化，最新统计")}\n\n是否按最新统计继续安全合并？`,
+            )
+          ) {
+            toast("已取消导入，未写入任何数据");
+            return;
+          }
+          if (!summary.additions.length) {
+            alert(
+              `${customerCodeImportSummaryText(summary, "导入完成")}\n\n没有可新增的客户编码，未写入数据。`,
+            );
+            return;
+          }
+          const saved = persistCustomerCodeRecords(
+            [...latest.records, ...summary.additions],
+            latest.document,
+          );
+          if (!saved.ok) {
+            throw new Error(`${saved.message}，未完成导入。`);
+          }
+          customerCodeSearchState = {
+            query: "",
+            status: "idle",
+            message: "",
+          };
+          renderCustomerCodeManager();
+          persistUiState();
+          alert(customerCodeImportSummaryText(summary, "导入完成"));
+          toast(`客户编码导入完成，新增${summary.additions.length}条`);
+        } catch (error) {
+          alert(
+            error instanceof Error
+              ? error.message
+              : "客户编码导入失败，未写入任何数据。",
+          );
+        }
       }
       function renderMarkdownInline(raw) {
         return esc(raw)
@@ -7101,7 +7308,7 @@ const KEY = "zy_kb_system_v2",
           ? ""
           : `<p class="customer-code-storage-warning" role="alert">${esc(customerCodeStoreState.message)}</p>`;
         $("#main").innerHTML =
-          `<div class="customer-code-page"><header class="customer-code-page-header"><div><span class="section-kicker">CUSTOMER CODE</span><h1>客户编码管理</h1><p>严格按 C＋6位数字查询并管理客户编码。</p></div><button type="button" class="btn" onclick="showHome()">返回首页</button></header><section class="customer-code-search-panel" aria-label="客户编码查询"><form class="customer-code-search-form" onsubmit="handleCustomerCodeSearch(event)"><label for="customerCodeManagerInput">客户编码</label><div><input id="customerCodeManagerInput" type="text" value="${esc(customerCodeSearchState.query)}" placeholder="输入客户编码" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="submit" class="btn primary">查询</button></div><small>格式：大写字母 C＋6位数字，例如 C000006</small></form>${renderCustomerCodeSearchResult()}${storageWarning}</section><section class="customer-code-stats" aria-label="客户编码统计"><article><span>全部编码</span><strong>${records.length}</strong></article><article><span>今日新增</span><strong>${todayCount}</strong></article></section><section class="customer-code-list-panel" aria-labelledby="customerCodeListTitle"><header><div><span class="section-kicker">RECORDS</span><h2 id="customerCodeListTitle">客户编码列表</h2></div><span>按数字部分升序排列</span></header><div class="customer-code-list">${renderCustomerCodeRows(records)}</div></section></div>`;
+          `<div class="customer-code-page"><header class="customer-code-page-header"><div><span class="section-kicker">CUSTOMER CODE</span><h1>客户编码管理</h1><p>严格按 C＋6位数字查询并管理客户编码。</p></div><div class="customer-code-page-actions"><button type="button" class="btn" onclick="exportCustomerCodes()">导出编码</button><button type="button" class="btn" onclick="selectCustomerCodeBackupFile()">导入编码</button><button type="button" class="btn" onclick="showHome()">返回首页</button><input id="customerCodeBackupInput" type="file" accept="application/json,.json" aria-label="选择客户编码备份文件" hidden onchange="handleCustomerCodeBackupInput(event)"></div></header><section class="customer-code-search-panel" aria-label="客户编码查询"><form class="customer-code-search-form" onsubmit="handleCustomerCodeSearch(event)"><label for="customerCodeManagerInput">客户编码</label><div><input id="customerCodeManagerInput" type="text" value="${esc(customerCodeSearchState.query)}" placeholder="输入客户编码" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="submit" class="btn primary">查询</button></div><small>格式：大写字母 C＋6位数字，例如 C000006</small></form>${renderCustomerCodeSearchResult()}${storageWarning}</section><section class="customer-code-stats" aria-label="客户编码统计"><article><span>全部编码</span><strong>${records.length}</strong></article><article><span>今日新增</span><strong>${todayCount}</strong></article></section><section class="customer-code-list-panel" aria-labelledby="customerCodeListTitle"><header><div><span class="section-kicker">RECORDS</span><h2 id="customerCodeListTitle">客户编码列表</h2></div><span>按数字部分升序排列</span></header><div class="customer-code-list">${renderCustomerCodeRows(records)}</div></section></div>`;
       }
       function showCustomerCodeManager(query = null) {
         activeArticleVisible = false;
