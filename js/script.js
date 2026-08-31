@@ -8,6 +8,9 @@ const KEY = "zy_kb_system_v2",
         ARTICLE_CATEGORY_OVERRIDE_KEY = "zy_kb_article_category_overrides_v1",
         UI_STATE_KEY = "zy_kb_ui_state_v1",
         CUSTOMER_CODES_KEY = "zy_kb_customer_codes_v1",
+        EXPENSE_GROUPS_KEY = "zy_kb_expense_groups_v1",
+        DAILY_EXPENSES_KEY = "zy_kb_daily_expenses_v1",
+        MAIL_ACCOUNTS_KEY = "zy_kb_mail_accounts_v1",
         PRICE_GALLERY_META_KEY = "zy_kb_price_gallery_meta_v1",
         GALLERY_COLLECTIONS_KEY = "zy_kb_gallery_collections_v1",
         PRICE_GALLERY_DB_NAME = "zy_kb_price_gallery_db",
@@ -65,6 +68,11 @@ const KEY = "zy_kb_system_v2",
       };
       let customerCodeEditingCode = "";
       let customerCodeSortMode = "code-asc";
+      let expenseGroups = loadExpenseGroups();
+      let dailyExpenses = loadDailyExpenses();
+      let expenseFilters = { date: "", groupId: "all" };
+      let mailAccounts = loadMailAccounts();
+      let mailStatusFilter = "all";
       const GALLERY_PRODUCTS = [
         "ChatGPT",
         "Claude",
@@ -140,7 +148,294 @@ const KEY = "zy_kb_system_v2",
               '"': "&quot;",
               "'": "&#39;",
             })[c],
+        );
+      }
+      function createManagerId(prefix) {
+        const suffix = globalThis.crypto?.randomUUID?.() ||
+          `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        return `${prefix}-${suffix}`;
+      }
+      function localDateValue(date = new Date()) {
+        const two = (value) => String(value).padStart(2, "0");
+        return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
+      }
+      function localTimeValue(date = new Date()) {
+        const two = (value) => String(value).padStart(2, "0");
+        return `${two(date.getHours())}:${two(date.getMinutes())}`;
+      }
+      function loadManagerDocument(key, field) {
+        try {
+          const raw = localStorage.getItem(key);
+          if (!raw) return [];
+          const document = JSON.parse(raw);
+          return document?.version === 1 && Array.isArray(document[field])
+            ? document[field]
+            : [];
+        } catch (error) {
+          return [];
+        }
+      }
+      function saveManagerDocument(key, field, records) {
+        try {
+          localStorage.setItem(
+            key,
+            JSON.stringify({ version: 1, [field]: records }),
           );
+          return true;
+        } catch (error) {
+          alert("保存失败，请检查浏览器存储空间或权限。");
+          return false;
+        }
+      }
+      function loadExpenseGroups() {
+        return loadManagerDocument(EXPENSE_GROUPS_KEY, "groups").filter(
+          (group) =>
+            group &&
+            typeof group.id === "string" &&
+            typeof group.name === "string",
+        );
+      }
+      function loadDailyExpenses() {
+        return loadManagerDocument(DAILY_EXPENSES_KEY, "records").filter(
+          (record) =>
+            record &&
+            typeof record.id === "string" &&
+            typeof record.groupId === "string" &&
+            Number.isFinite(Number(record.amount)) &&
+            /^\d{4}-\d{2}-\d{2}$/.test(record.date) &&
+            /^\d{2}:\d{2}$/.test(record.time),
+        );
+      }
+      function loadMailAccounts() {
+        return loadManagerDocument(MAIL_ACCOUNTS_KEY, "records").filter(
+          (record) =>
+            record &&
+            typeof record.id === "string" &&
+            typeof record.account === "string" &&
+            typeof record.originalPassword === "string" &&
+            typeof record.sourceBatch === "string",
+        );
+      }
+      function addExpenseGroup(event) {
+        event.preventDefault();
+        const input = event.currentTarget?.elements?.namedItem("groupName");
+        const name = String(input?.value || "").trim();
+        if (!name) return;
+        if (
+          expenseGroups.some(
+            (group) => group.name.toLocaleLowerCase() === name.toLocaleLowerCase(),
+          )
+        ) {
+          input?.setCustomValidity("该第三方群已存在");
+          input?.reportValidity();
+          return;
+        }
+        input?.setCustomValidity("");
+        const nextGroups = [
+          ...expenseGroups,
+          { id: createManagerId("group"), name, createdAt: new Date().toISOString() },
+        ];
+        if (!saveManagerDocument(EXPENSE_GROUPS_KEY, "groups", nextGroups)) return;
+        expenseGroups = nextGroups;
+        renderDailyExpenseManager();
+        toast("第三方群已新增");
+      }
+      function addDailyExpense(event) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const groupId = String(form?.elements?.namedItem("groupId")?.value || "");
+        const amount = Number(form?.elements?.namedItem("amount")?.value);
+        const date = String(form?.elements?.namedItem("date")?.value || "");
+        const time = String(form?.elements?.namedItem("time")?.value || "");
+        const note = String(form?.elements?.namedItem("note")?.value || "").trim();
+        if (
+          !expenseGroups.some((group) => group.id === groupId) ||
+          !Number.isFinite(amount) ||
+          amount <= 0 ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+          !/^\d{2}:\d{2}$/.test(time)
+        ) {
+          alert("请选择第三方群并填写有效的金额、日期和时间。");
+          return;
+        }
+        const nextRecords = [
+          ...dailyExpenses,
+          {
+            id: createManagerId("expense"),
+            groupId,
+            amount: Math.round(amount * 100) / 100,
+            date,
+            time,
+            note: note.slice(0, 500),
+            createdAt: new Date().toISOString(),
+          },
+        ];
+        if (!saveManagerDocument(DAILY_EXPENSES_KEY, "records", nextRecords)) return;
+        dailyExpenses = nextRecords;
+        renderDailyExpenseManager();
+        toast("支出已记录");
+      }
+      function setExpenseFilter(type, value) {
+        if (type === "date") expenseFilters.date = String(value || "");
+        if (type === "group") expenseFilters.groupId = String(value || "all");
+        renderDailyExpenseManager();
+      }
+      function expenseGroupName(groupId) {
+        return expenseGroups.find((group) => group.id === groupId)?.name || "已删除群";
+      }
+      function expenseMoney(value) {
+        return `¥${Number(value || 0).toFixed(2)}`;
+      }
+      function copyDailyExpense(id) {
+        const record = dailyExpenses.find((item) => item.id === id);
+        if (!record) return;
+        copyText(
+          [
+            `第三方群：${expenseGroupName(record.groupId)}`,
+            `支出金额：${expenseMoney(record.amount)}`,
+            `支出时间：${record.date} ${record.time}`,
+            record.note ? `备注：${record.note}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        );
+      }
+      function deleteDailyExpense(id) {
+        const record = dailyExpenses.find((item) => item.id === id);
+        if (!record || !confirm("确定删除这笔支出吗？删除后无法撤销。")) return;
+        const nextRecords = dailyExpenses.filter((item) => item.id !== id);
+        if (!saveManagerDocument(DAILY_EXPENSES_KEY, "records", nextRecords)) return;
+        dailyExpenses = nextRecords;
+        renderDailyExpenseManager();
+        toast("支出已删除");
+      }
+      function renderExpenseRows(records) {
+        if (!records.length) {
+          return '<div class="manager-empty">当前筛选条件下暂无支出记录</div>';
+        }
+        return records
+          .map(
+            (record) =>
+              `<article class="manager-record expense-record"><div class="manager-record-main"><strong>${esc(expenseGroupName(record.groupId))}</strong><span class="expense-amount">${expenseMoney(record.amount)}</span><time datetime="${esc(`${record.date}T${record.time}`)}">${esc(record.date)} ${esc(record.time)}</time>${record.note ? `<p>${esc(record.note)}</p>` : ""}</div><div class="manager-record-actions"><button type="button" class="btn" onclick="copyDailyExpense('${esc(record.id)}')">复制</button><button type="button" class="btn danger" onclick="deleteDailyExpense('${esc(record.id)}')">删除</button></div></article>`,
+          )
+          .join("");
+      }
+      function renderDailyExpenseManager() {
+        activeArticleVisible = false;
+        editing = false;
+        setMode("daily-expenses");
+        renderNav();
+        renderList([], "每日支出记录");
+        const today = localDateValue();
+        const month = today.slice(0, 7);
+        const sum = (records) => records.reduce((total, item) => total + Number(item.amount), 0);
+        const filtered = dailyExpenses
+          .filter(
+            (record) =>
+              (!expenseFilters.date || record.date === expenseFilters.date) &&
+              (expenseFilters.groupId === "all" || record.groupId === expenseFilters.groupId),
+          )
+          .sort((a, b) => `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`));
+        const groupTotals = expenseGroups
+          .map((group) => ({
+            ...group,
+            total: sum(dailyExpenses.filter((record) => record.groupId === group.id)),
+            count: dailyExpenses.filter((record) => record.groupId === group.id).length,
+          }))
+          .filter((group) => group.count)
+          .sort((a, b) => b.total - a.total);
+        const groupOptions = expenseGroups
+          .map((group) => `<option value="${esc(group.id)}">${esc(group.name)}</option>`)
+          .join("");
+        $("#main").innerHTML =
+          `<div class="manager-page"><header class="manager-page-header"><div><span class="section-kicker">DAILY EXPENSE</span><h1>每日支出记录</h1><p>按第三方群记录和核对每日支出。</p></div><button type="button" class="btn" onclick="showHome()">返回首页</button></header><section class="manager-entry-grid"><form class="manager-panel manager-form" onsubmit="addExpenseGroup(event)"><h2>新增第三方群</h2><label><span>群名称</span><input name="groupName" maxlength="80" placeholder="例如：第三方合作群 A" required></label><button type="submit" class="btn primary">新增群</button></form><form class="manager-panel manager-form expense-entry-form" onsubmit="addDailyExpense(event)"><h2>录入支出</h2><div class="manager-form-grid"><label><span>第三方群</span><select name="groupId" required><option value="">请选择群</option>${groupOptions}</select></label><label><span>支出金额（元）</span><input name="amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" required></label><label><span>日期</span><input name="date" type="date" value="${today}" required></label><label><span>时间</span><input name="time" type="time" value="${localTimeValue()}" required></label><label class="manager-form-wide"><span>备注</span><input name="note" maxlength="500" placeholder="选填"></label></div><button type="submit" class="btn primary"${expenseGroups.length ? "" : " disabled"}>保存支出</button>${expenseGroups.length ? "" : "<small>请先新增第三方群。</small>"}</form></section><section class="manager-stats" aria-label="支出统计"><article><span>今日支出</span><strong>${expenseMoney(sum(dailyExpenses.filter((record) => record.date === today)))}</strong></article><article><span>本月支出</span><strong>${expenseMoney(sum(dailyExpenses.filter((record) => record.date.startsWith(month))))}</strong></article><article><span>今日笔数</span><strong>${dailyExpenses.filter((record) => record.date === today).length}</strong></article><article><span>支出群</span><strong>${new Set(dailyExpenses.map((record) => record.groupId)).size}</strong></article></section><section class="manager-content-grid"><section class="manager-panel"><header class="manager-panel-header"><div><span class="section-kicker">RECORDS</span><h2>支出明细</h2></div><div class="manager-filters"><input type="date" value="${esc(expenseFilters.date)}" aria-label="按日期筛选" onchange="setExpenseFilter('date',this.value)"><select aria-label="按第三方群筛选" onchange="setExpenseFilter('group',this.value)"><option value="all">全部群</option>${expenseGroups.map((group) => `<option value="${esc(group.id)}"${expenseFilters.groupId === group.id ? " selected" : ""}>${esc(group.name)}</option>`).join("")}</select></div></header><div class="manager-record-list">${renderExpenseRows(filtered)}</div></section><aside class="manager-panel group-summary"><header class="manager-panel-header"><div><span class="section-kicker">GROUPS</span><h2>支出群统计</h2></div></header>${groupTotals.length ? groupTotals.map((group) => `<div class="group-summary-row"><span><strong>${esc(group.name)}</strong><small>${group.count} 笔</small></span><b>${expenseMoney(group.total)}</b></div>`).join("") : '<div class="manager-empty compact">暂无群支出</div>'}</aside></section></div>`;
+        persistUiState();
+      }
+      function addMailAccount(event) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const account = String(form?.elements?.namedItem("account")?.value || "").trim();
+        const originalPassword = String(form?.elements?.namedItem("originalPassword")?.value || "");
+        const sourceBatch = String(form?.elements?.namedItem("sourceBatch")?.value || "").trim();
+        if (!account || !originalPassword || !sourceBatch) return;
+        if (mailAccounts.some((record) => record.account.toLocaleLowerCase() === account.toLocaleLowerCase())) {
+          alert("该邮箱账号已存在。");
+          return;
+        }
+        const nextRecords = [
+          ...mailAccounts,
+          {
+            id: createManagerId("mail"),
+            account,
+            originalPassword,
+            sourceBatch,
+            customer: "",
+            newPassword: "",
+            deliveryDate: "",
+            createdAt: new Date().toISOString(),
+          },
+        ];
+        if (!saveManagerDocument(MAIL_ACCOUNTS_KEY, "records", nextRecords)) return;
+        mailAccounts = nextRecords;
+        renderMailAccountManager();
+        toast("邮箱账号已录入");
+      }
+      function deliverMailAccount(event, id) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const customer = String(form?.elements?.namedItem("customer")?.value || "").trim();
+        const newPassword = String(form?.elements?.namedItem("newPassword")?.value || "");
+        const deliveryDate = String(form?.elements?.namedItem("deliveryDate")?.value || "");
+        if (!customer || !newPassword || !/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return;
+        const nextRecords = mailAccounts.map((record) =>
+          record.id === id
+            ? { ...record, customer, newPassword, deliveryDate, deliveredAt: new Date().toISOString() }
+            : record,
+        );
+        if (!saveManagerDocument(MAIL_ACCOUNTS_KEY, "records", nextRecords)) return;
+        mailAccounts = nextRecords;
+        renderMailAccountManager();
+        toast("交付信息已补录");
+      }
+      function setMailStatusFilter(value) {
+        mailStatusFilter = ["all", "pending", "delivered"].includes(value) ? value : "all";
+        renderMailAccountManager();
+      }
+      function copyMailField(id, field) {
+        const record = mailAccounts.find((item) => item.id === id);
+        if (!record || !["account", "originalPassword"].includes(field)) return;
+        copyText(record[field]);
+      }
+      function isMailDelivered(record) {
+        return Boolean(record.customer && record.newPassword && record.deliveryDate);
+      }
+      function renderMailRows(records) {
+        if (!records.length) {
+          return '<div class="manager-empty">当前筛选条件下暂无邮箱账号</div>';
+        }
+        return records
+          .map((record) => {
+            const delivered = isMailDelivered(record);
+            return `<article class="manager-record mail-record"><div class="mail-account-head"><div><span class="manager-status ${delivered ? "is-delivered" : "is-pending"}">${delivered ? "已交付" : "未交付"}</span><strong>${esc(record.account)}</strong><small>来源批次：${esc(record.sourceBatch)}</small></div><div class="manager-record-actions"><button type="button" class="btn" onclick="copyMailField('${esc(record.id)}','account')">复制账号</button><button type="button" class="btn" onclick="copyMailField('${esc(record.id)}','originalPassword')">复制原密码</button></div></div>${delivered ? `<dl class="mail-delivery-detail"><div><dt>使用客户</dt><dd>${esc(record.customer)}</dd></div><div><dt>新密码</dt><dd>${esc(record.newPassword)}</dd></div><div><dt>交付日期</dt><dd>${esc(record.deliveryDate)}</dd></div></dl>` : `<form class="mail-delivery-form" onsubmit="deliverMailAccount(event,'${esc(record.id)}')"><label><span>使用客户</span><input name="customer" maxlength="100" required></label><label><span>新密码</span><input name="newPassword" maxlength="200" required></label><label><span>交付日期</span><input name="deliveryDate" type="date" value="${localDateValue()}" required></label><button type="submit" class="btn primary">确认交付</button></form>`}</article>`;
+          })
+          .join("");
+      }
+      function renderMailAccountManager() {
+        activeArticleVisible = false;
+        editing = false;
+        setMode("mail-accounts");
+        renderNav();
+        renderList([], "成品号邮箱管理");
+        const records = [...mailAccounts]
+          .filter((record) =>
+            mailStatusFilter === "all" ||
+            (mailStatusFilter === "delivered" ? isMailDelivered(record) : !isMailDelivered(record)),
+          )
+          .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+        const deliveredCount = mailAccounts.filter(isMailDelivered).length;
+        $("#main").innerHTML =
+          `<div class="manager-page mail-manager-page"><header class="manager-page-header"><div><span class="section-kicker">MAIL ACCOUNT</span><h1>成品号邮箱管理</h1><p>登记邮箱来源，并在交付后补全客户与新密码。</p></div><button type="button" class="btn" onclick="showHome()">返回首页</button></header><section class="manager-panel"><form class="manager-form mail-entry-form" onsubmit="addMailAccount(event)"><h2>录入邮箱账号</h2><div class="manager-form-grid three-columns"><label><span>邮箱账号</span><input name="account" type="email" maxlength="200" autocomplete="off" required></label><label><span>原密码</span><input name="originalPassword" maxlength="200" autocomplete="new-password" required></label><label><span>来源批次</span><input name="sourceBatch" maxlength="100" placeholder="例如：2026-08-A" required></label></div><button type="submit" class="btn primary">保存账号</button></form></section><section class="manager-stats mail-stats"><article><span>全部账号</span><strong>${mailAccounts.length}</strong></article><article><span>未交付</span><strong>${mailAccounts.length - deliveredCount}</strong></article><article><span>已交付</span><strong>${deliveredCount}</strong></article></section><section class="manager-panel"><header class="manager-panel-header"><div><span class="section-kicker">ACCOUNTS</span><h2>邮箱列表</h2></div><select aria-label="按交付状态筛选" onchange="setMailStatusFilter(this.value)"><option value="all"${mailStatusFilter === "all" ? " selected" : ""}>全部状态</option><option value="pending"${mailStatusFilter === "pending" ? " selected" : ""}>未交付</option><option value="delivered"${mailStatusFilter === "delivered" ? " selected" : ""}>已交付</option></select></header><div class="manager-record-list mail-record-list">${renderMailRows(records)}</div></section></div>`;
+        persistUiState();
       }
       function createEmptyCustomerCodeDocument() {
         return { version: 1, records: [] };
@@ -6986,7 +7281,7 @@ const KEY = "zy_kb_system_v2",
             : "";
         return {
           version: 1,
-          page: ["home", "fav", "recent", "group", "gallery", "customer-codes"].includes(mode)
+          page: ["home", "fav", "recent", "group", "gallery", "customer-codes", "daily-expenses", "mail-accounts"].includes(mode)
             ? mode
             : "home",
           categoryId,
@@ -7024,7 +7319,7 @@ const KEY = "zy_kb_system_v2",
             typeof parsed !== "object" ||
             Array.isArray(parsed) ||
             parsed.version !== 1 ||
-            !["home", "fav", "recent", "group", "gallery", "customer-codes"].includes(
+            !["home", "fav", "recent", "group", "gallery", "customer-codes", "daily-expenses", "mail-accounts"].includes(
               parsed.page,
             )
           ) {
@@ -7118,6 +7413,10 @@ const KEY = "zy_kb_system_v2",
             showRecent();
           } else if (state.page === "customer-codes") {
             showCustomerCodeManager();
+          } else if (state.page === "daily-expenses") {
+            renderDailyExpenseManager();
+          } else if (state.page === "mail-accounts") {
+            renderMailAccountManager();
           } else if (state.page === "group") {
             const gi = findGroupIndexByCategoryId(state.categoryId);
             if (gi < 0) {
@@ -7198,7 +7497,10 @@ const KEY = "zy_kb_system_v2",
         app?.classList.toggle("gallery-mode", m === "gallery");
         app?.classList.toggle("home-mode", m === "home");
         app?.classList.toggle("category-mode", m === "group");
-        app?.classList.toggle("customer-code-mode", m === "customer-codes");
+        app?.classList.toggle(
+          "customer-code-mode",
+          ["customer-codes", "daily-expenses", "mail-accounts"].includes(m),
+        );
         app?.classList.toggle(
           "home-searching",
           m === "home" && Boolean($("#q")?.value.trim()),
@@ -7645,7 +7947,7 @@ const KEY = "zy_kb_system_v2",
       }
 
       function renderRefundCalculator() {
-        return `<section class="refund-calculator" id="refundCalculator" data-calc-type="normal" aria-labelledby="refundCalculatorTitle"><header class="refund-calculator-header"><div><span class="section-kicker">内部核算工具</span><h2 id="refundCalculatorTitle">售后退款计算器</h2><p>选择业务场景并填写订单信息，金额与说明会即时更新。</p></div><span class="calculator-status-pill">30天周期</span></header><div class="refund-calculator-layout"><div class="refund-calculator-form"><fieldset class="calculator-mode-fieldset"><legend>计算模式</legend><input id="ctype" type="hidden" value="normal"><div class="calculator-mode-buttons" role="group" aria-label="退款计算类型"><button type="button" class="calculator-mode-button is-selected" data-calculator-type="normal" aria-pressed="true" onclick="setCalculatorType('normal')"><strong>普通售后</strong><span>扣8%服务费</span></button><button type="button" class="calculator-mode-button" data-calculator-type="onhold" aria-pressed="false" onclick="setCalculatorType('onhold')"><strong>on-hold</strong><span>不扣8% · 剩余金额各承担一半</span></button><button type="button" class="calculator-mode-button" data-calculator-type="legacy_onhold" aria-pressed="false" onclick="setCalculatorType('legacy_onhold')"><strong>原风险共担</strong><span>保留原有扣8%公式</span></button><button type="button" class="calculator-mode-button" data-calculator-type="kyc" aria-pressed="false" onclick="setCalculatorType('kyc')"><strong>KYC</strong><span>销售价减官方成本后按天</span></button></div></fieldset><div class="calculator-input-grid"><label class="field"><span>订单金额（元）</span><input id="price" type="number" min="0" step="0.01" inputmode="decimal" value="499" oninput="calc()"></label><label class="field"><span>已使用天数</span><input id="days" type="number" min="0" max="30" step="1" inputmode="numeric" value="10" oninput="calc()"></label><label class="field calculator-cost-field is-disabled"><span>官方订阅成本（仅KYC）</span><input id="cost" type="number" min="0" step="0.01" inputmode="decimal" value="150" disabled oninput="calc()"></label></div><p class="calculator-validation" id="calcValidation" role="status" aria-live="polite"></p><div class="calculator-notice"><span aria-hidden="true">i</span><p>内部核算使用。对客户仅告知最终金额，不直接展示内部计算公式。</p></div></div><section class="refund-result-card" aria-labelledby="refundResultTitle"><div class="refund-result-copy"><span id="refundResultTitle">预计退款金额</span><strong id="amount">¥0.00</strong><p id="formula"></p><div class="calculator-breakdown" id="calcDetails"></div></div><div class="calculator-illustration" aria-hidden="true"><svg viewBox="0 0 220 180" role="img"><defs><linearGradient id="calculatorBodyGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6859df"/><stop offset="1" stop-color="#4f8ee8"/></linearGradient><linearGradient id="coinGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd56a"/><stop offset="1" stop-color="#f3a93b"/></linearGradient></defs><rect x="25" y="18" width="122" height="145" rx="24" fill="url(#calculatorBodyGradient)"/><rect x="43" y="37" width="86" height="35" rx="9" fill="#f5f7ff"/><rect x="45" y="88" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="76" y="88" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="107" y="88" width="19" height="19" rx="6" fill="#f2b9ce"/><rect x="45" y="119" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="76" y="119" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="107" y="119" width="19" height="19" rx="6" fill="#f7d596"/><ellipse cx="169" cy="135" rx="34" ry="12" fill="#d58c28" opacity=".22"/><circle cx="171" cy="111" r="28" fill="url(#coinGradient)"/><circle cx="171" cy="111" r="19" fill="none" stroke="#fff1b6" stroke-width="3"/><path d="M171 98v26M164 103h11a6 6 0 0 1 0 12h-8a6 6 0 0 0 0 12h12" fill="none" stroke="#fff8d9" stroke-width="4" stroke-linecap="round"/></svg></div></section></div></section>`;
+        return `<section class="refund-calculator" id="refundCalculator" data-calc-type="onhold" aria-labelledby="refundCalculatorTitle"><header class="refund-calculator-header"><div><span class="section-kicker">内部核算工具</span><h2 id="refundCalculatorTitle">售后退款计算器</h2><p>三种售后模式并排选择，金额与说明会即时更新。</p></div><span class="calculator-status-pill">30天周期</span></header><div class="refund-calculator-layout"><div class="refund-calculator-form"><fieldset class="calculator-mode-fieldset"><legend>计算模式</legend><input id="ctype" type="hidden" value="onhold"><div class="calculator-mode-buttons" role="group" aria-label="退款计算类型"><button type="button" class="calculator-mode-button is-selected" data-calculator-type="onhold" aria-pressed="true" onclick="setCalculatorType('onhold')"><strong>on-hold</strong><span>不扣手续费</span></button><button type="button" class="calculator-mode-button" data-calculator-type="legacy_onhold" aria-pressed="false" onclick="setCalculatorType('legacy_onhold')"><strong>on-hold</strong><span>扣8%手续费</span></button><button type="button" class="calculator-mode-button" data-calculator-type="normal" aria-pressed="false" onclick="setCalculatorType('normal')"><strong>普通售后</strong><span>扣8%手续费</span></button></div></fieldset><div class="calculator-input-grid"><label class="field"><span>订单金额（元）</span><input id="price" type="number" min="0" step="0.01" inputmode="decimal" value="499" oninput="calc()"></label><label class="field"><span>已使用天数</span><input id="days" type="number" min="0" max="30" step="1" inputmode="numeric" value="10" oninput="calc()"></label></div><p class="calculator-validation" id="calcValidation" role="status" aria-live="polite"></p><div class="calculator-notice"><span aria-hidden="true">i</span><p>内部核算使用。对客户仅告知最终金额，不直接展示内部计算公式。</p></div></div><section class="refund-result-card" aria-labelledby="refundResultTitle"><div class="refund-result-copy"><span id="refundResultTitle">预计退款金额</span><strong id="amount">¥0.00</strong><p id="formula"></p><div class="calculator-breakdown" id="calcDetails"></div></div><div class="calculator-illustration" aria-hidden="true"><svg viewBox="0 0 220 180" role="img"><defs><linearGradient id="calculatorBodyGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6859df"/><stop offset="1" stop-color="#4f8ee8"/></linearGradient><linearGradient id="coinGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd56a"/><stop offset="1" stop-color="#f3a93b"/></linearGradient></defs><rect x="25" y="18" width="122" height="145" rx="24" fill="url(#calculatorBodyGradient)"/><rect x="43" y="37" width="86" height="35" rx="9" fill="#f5f7ff"/><rect x="45" y="88" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="76" y="88" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="107" y="88" width="19" height="19" rx="6" fill="#f2b9ce"/><rect x="45" y="119" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="76" y="119" width="19" height="19" rx="6" fill="#b9c8ff"/><rect x="107" y="119" width="19" height="19" rx="6" fill="#f7d596"/><ellipse cx="169" cy="135" rx="34" ry="12" fill="#d58c28" opacity=".22"/><circle cx="171" cy="111" r="28" fill="url(#coinGradient)"/><circle cx="171" cy="111" r="19" fill="none" stroke="#fff1b6" stroke-width="3"/><path d="M171 98v26M164 103h11a6 6 0 0 1 0 12h-8a6 6 0 0 0 0 12h12" fill="none" stroke="#fff8d9" stroke-width="4" stroke-linecap="round"/></svg></div></section></div></section>`;
       }
 
       function showHome() {
@@ -7653,13 +7955,17 @@ const KEY = "zy_kb_system_v2",
         editing = false;
         setMode("home");
         renderNav();
-        const recentRecords = recent
-          .slice(0, 6)
-          .map((key) => resolveStoredIdRecord(key))
-          .filter(Boolean);
-        renderList(recentRecords, "最近使用");
+        renderList([], "首页");
+        const todayExpenses = dailyExpenses.filter(
+          (record) => record.date === localDateValue(),
+        );
+        const todayExpenseTotal = todayExpenses.reduce(
+          (total, record) => total + Number(record.amount),
+          0,
+        );
+        const deliveredMailCount = mailAccounts.filter(isMailDelivered).length;
         $("#main").innerHTML =
-          `<div class="dashboard"><header class="dashboard-heading"><div><span class="section-kicker">客服工作台</span><h1>智源客服知识库</h1><p>统一管理客服话术、产品资料、售后规则和新人培训内容。</p></div><span class="dashboard-date">知识与核算，一站处理</span></header>${renderRefundCalculator()}<section class="home-feed-grid" aria-label="常用知识动态"><section class="home-feed-card" aria-labelledby="homeRecentTitle"><header><div><span class="home-feed-eyebrow">RECENT</span><h2 id="homeRecentTitle">最近使用</h2></div><button type="button" onclick="showRecent()">查看全部</button></header><div class="home-feed-list">${renderHomeDashboardRecords(recentRecords, "暂时没有最近使用内容")}</div></section><section class="home-feed-card customer-code-shortcut" aria-labelledby="homeCustomerCodeTitle" onclick="showCustomerCodeManager()"><header><div><span class="home-feed-eyebrow">CUSTOMER CODE</span><h2 id="homeCustomerCodeTitle">客户编码</h2></div><button type="button" onclick="event.stopPropagation();showCustomerCodeManager()">进入管理</button></header><form class="home-customer-code-form" onsubmit="handleHomeCustomerCodeSearch(event)" onclick="event.stopPropagation()"><label for="homeCustomerCodeInput">快捷查询</label><div><input id="homeCustomerCodeInput" type="text" placeholder="输入客户编码" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="submit">查询</button></div><small>严格格式：C＋6位数字</small></form></section></section></div>`;
+          `<div class="dashboard"><header class="dashboard-heading"><div><span class="section-kicker">客服工作台</span><h1>智源客服知识库</h1><p>统一管理客服话术、产品资料、售后规则和新人培训内容。</p></div><span class="dashboard-date">知识与核算，一站处理</span></header>${renderRefundCalculator()}<section class="home-feed-grid home-shortcut-grid" aria-label="工作管理入口"><section class="home-feed-card home-shortcut expense-shortcut" aria-labelledby="homeExpenseTitle" onclick="renderDailyExpenseManager()"><header><div><span class="home-feed-eyebrow">DAILY EXPENSE</span><h2 id="homeExpenseTitle">每日支出记录</h2></div><button type="button" onclick="event.stopPropagation();renderDailyExpenseManager()">进入管理</button></header><div class="home-shortcut-summary"><span><strong>${expenseMoney(todayExpenseTotal)}</strong><small>今日支出</small></span><span><strong>${todayExpenses.length}</strong><small>今日笔数</small></span></div><p>按日期与第三方群记录、筛选和统计支出。</p></section><section class="home-feed-card home-shortcut mail-shortcut" aria-labelledby="homeMailTitle" onclick="renderMailAccountManager()"><header><div><span class="home-feed-eyebrow">MAIL ACCOUNT</span><h2 id="homeMailTitle">成品号邮箱管理</h2></div><button type="button" onclick="event.stopPropagation();renderMailAccountManager()">进入管理</button></header><div class="home-shortcut-summary"><span><strong>${mailAccounts.length - deliveredMailCount}</strong><small>未交付</small></span><span><strong>${deliveredMailCount}</strong><small>已交付</small></span></div><p>登记邮箱来源，并在交付后补全客户信息。</p></section><section class="home-feed-card home-shortcut customer-code-shortcut" aria-labelledby="homeCustomerCodeTitle" onclick="showCustomerCodeManager()"><header><div><span class="home-feed-eyebrow">CUSTOMER CODE</span><h2 id="homeCustomerCodeTitle">客户编码</h2></div><button type="button" onclick="event.stopPropagation();showCustomerCodeManager()">进入管理</button></header><form class="home-customer-code-form" onsubmit="handleHomeCustomerCodeSearch(event)" onclick="event.stopPropagation()"><label for="homeCustomerCodeInput">快捷查询</label><div><input id="homeCustomerCodeInput" type="text" placeholder="输入客户编码" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="submit">查询</button></div><small>严格格式：C＋6位数字</small></form></section></section></div>`;
         calc();
         persistUiState();
       }

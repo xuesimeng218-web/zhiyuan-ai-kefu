@@ -2326,7 +2326,7 @@
       }
       .calculator-mode-buttons {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 8px;
       }
       .calculator-mode-button {
@@ -2454,7 +2454,7 @@
       }
       .calculator-input-grid {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 9px;
         margin-top: 13px;
       }
@@ -2804,6 +2804,55 @@
         box-shadow:
           0 16px 36px rgba(83, 125, 180, 0.08),
           0 5px 16px rgba(104, 93, 174, 0.055);
+      }
+      .home-shortcut-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .home-shortcut {
+        min-height: 205px;
+        cursor: pointer;
+      }
+      .home-shortcut.expense-shortcut {
+        background: linear-gradient(135deg, #e8f2f4, #e9edf7);
+      }
+      .home-shortcut.mail-shortcut {
+        background: linear-gradient(135deg, #eee9f5, #e7eef7);
+      }
+      .home-shortcut.customer-code-shortcut {
+        background: linear-gradient(135deg, #e6f0f5, #e9e7f4);
+      }
+      .home-shortcut:hover,
+      .home-shortcut:focus-within {
+        border-color: rgba(158, 174, 207, 0.74);
+      }
+      .home-shortcut-summary {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px;
+      }
+      .home-shortcut-summary > span {
+        border: 1px solid rgba(255, 255, 255, 0.62);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.44);
+        padding: 12px;
+      }
+      .home-shortcut-summary strong,
+      .home-shortcut-summary small {
+        display: block;
+      }
+      .home-shortcut-summary strong {
+        color: #5143bd;
+        font-size: 20px;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+      }
+      .home-shortcut-summary small,
+      .home-shortcut > p {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .home-shortcut > p {
+        margin: 11px 0 0;
       }
       .home-feed-card.customer-code-shortcut:hover {
         border-color: rgba(178, 205, 239, 0.82);
@@ -3187,6 +3236,300 @@
         border-radius: 12px;
         color: var(--muted);
       }
+      .manager-page {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        max-width: 1180px;
+        gap: 18px;
+        margin: auto;
+      }
+      .manager-page-header,
+      .manager-panel-header,
+      .mail-account-head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .manager-page-header h1 {
+        margin: 0;
+        font-size: clamp(25px, 2.7vw, 36px);
+        line-height: 1.2;
+      }
+      .manager-page-header p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+      .manager-entry-grid,
+      .manager-content-grid {
+        display: grid;
+        grid-template-columns: minmax(260px, 0.65fr) minmax(0, 1.35fr);
+        gap: 16px;
+      }
+      .manager-content-grid {
+        grid-template-columns: minmax(0, 1fr) minmax(250px, 0.34fr);
+        align-items: start;
+      }
+      .manager-panel {
+        min-width: 0;
+        border: 1px solid rgba(255, 255, 255, 0.86);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: var(--shadow);
+        padding: 20px;
+      }
+      .manager-panel h2 {
+        margin: 0;
+        font-size: 20px;
+      }
+      .manager-form {
+        display: grid;
+        align-content: start;
+        gap: 13px;
+      }
+      .manager-form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .manager-form-grid.three-columns {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .manager-form label,
+      .mail-delivery-form label {
+        display: grid;
+        min-width: 0;
+        gap: 5px;
+      }
+      .manager-form label > span,
+      .mail-delivery-form label > span {
+        color: #4d5970;
+        font-size: 11px;
+        font-weight: 800;
+      }
+      .manager-form input,
+      .manager-form select,
+      .manager-filters input,
+      .manager-filters select,
+      .manager-panel-header > select,
+      .mail-delivery-form input {
+        width: 100%;
+        min-width: 0;
+        border: 1px solid #d9deeb;
+        border-radius: 10px;
+        outline: none;
+        background: #fff;
+        color: var(--ink);
+        padding: 9px 11px;
+      }
+      .manager-form input:focus,
+      .manager-form select:focus,
+      .manager-filters input:focus,
+      .manager-filters select:focus,
+      .manager-panel-header > select:focus,
+      .mail-delivery-form input:focus {
+        border-color: var(--brand);
+        box-shadow: 0 0 0 3px rgba(91, 79, 219, 0.1);
+      }
+      .manager-form-wide {
+        grid-column: 1 / -1;
+      }
+      .manager-form > .btn {
+        justify-self: start;
+      }
+      .manager-form > small {
+        color: var(--muted);
+      }
+      .manager-stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .manager-stats.mail-stats {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .manager-stats article {
+        border: 1px solid rgba(255, 255, 255, 0.82);
+        border-radius: 16px;
+        background: linear-gradient(135deg, #eaf3f7, #eeeaf7);
+        box-shadow: var(--shadow);
+        padding: 12px 18px;
+      }
+      .manager-stats span,
+      .manager-stats strong {
+        display: block;
+      }
+      .manager-stats span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .manager-stats strong {
+        margin-top: 2px;
+        color: var(--brand);
+        font-size: clamp(22px, 2.3vw, 30px);
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+      }
+      .manager-panel-header {
+        margin-bottom: 14px;
+      }
+      .manager-filters {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .manager-record-list {
+        display: grid;
+        gap: 10px;
+      }
+      .manager-record {
+        min-width: 0;
+        border: 1px solid #e5e9f1;
+        border-radius: 13px;
+        background: #f9fbfd;
+        padding: 13px;
+      }
+      .expense-record {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+      }
+      .manager-record-main {
+        display: grid;
+        min-width: 0;
+        grid-template-columns: minmax(120px, 1fr) auto auto;
+        align-items: center;
+        gap: 5px 12px;
+      }
+      .manager-record-main strong,
+      .manager-record-main p {
+        overflow-wrap: anywhere;
+      }
+      .manager-record-main time,
+      .mail-account-head small {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .manager-record-main p {
+        grid-column: 1 / -1;
+        margin: 0;
+        color: #596276;
+        font-size: 12px;
+      }
+      .expense-amount {
+        color: #b45309;
+        font-weight: 800;
+      }
+      .manager-record-actions {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 6px;
+      }
+      .group-summary-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border-top: 1px solid #e8ebf2;
+        padding: 10px 0;
+      }
+      .group-summary-row:first-of-type {
+        border-top: 0;
+      }
+      .group-summary-row span,
+      .group-summary-row strong,
+      .group-summary-row small {
+        display: block;
+      }
+      .group-summary-row small {
+        color: var(--muted);
+      }
+      .group-summary-row b {
+        color: var(--brand);
+        white-space: nowrap;
+      }
+      .manager-empty {
+        display: grid;
+        min-height: 120px;
+        place-items: center;
+        border: 1px dashed #dce1eb;
+        border-radius: 12px;
+        color: var(--muted);
+        padding: 16px;
+        text-align: center;
+      }
+      .manager-empty.compact {
+        min-height: 80px;
+      }
+      .mail-account-head {
+        align-items: center;
+      }
+      .mail-account-head > div:first-child {
+        display: grid;
+        min-width: 0;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 3px 8px;
+      }
+      .mail-account-head strong {
+        overflow-wrap: anywhere;
+      }
+      .mail-account-head small {
+        grid-column: 2;
+      }
+      .manager-status {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: 10px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+      .manager-status.is-pending {
+        background: #fff0db;
+        color: #a45a05;
+      }
+      .manager-status.is-delivered {
+        background: #def5e9;
+        color: #087b51;
+      }
+      .mail-delivery-form {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+        align-items: end;
+        gap: 9px;
+        margin-top: 13px;
+        border-top: 1px solid #e6eaf1;
+        padding-top: 13px;
+      }
+      .mail-delivery-detail {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin: 13px 0 0;
+        border-top: 1px solid #e6eaf1;
+        padding-top: 13px;
+      }
+      .mail-delivery-detail div {
+        min-width: 0;
+        border-radius: 10px;
+        background: #fff;
+        padding: 8px 10px;
+      }
+      .mail-delivery-detail dt {
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .mail-delivery-detail dd {
+        margin: 1px 0 0;
+        overflow-wrap: anywhere;
+        font-weight: 700;
+      }
       @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
         .sidebar {
           -webkit-backdrop-filter: blur(16px) saturate(112%);
@@ -3198,9 +3541,10 @@
           backdrop-filter: blur(14px) saturate(110%);
         }
         .refund-calculator,
-        .home-feed-card,
+        .home-feed-card:not(.home-shortcut),
         .customer-code-search-panel,
-        .customer-code-list-panel {
+        .customer-code-list-panel,
+        .manager-panel {
           background: rgba(255, 255, 255, 0.82);
           -webkit-backdrop-filter: blur(16px) saturate(112%);
           backdrop-filter: blur(16px) saturate(112%);
@@ -3494,8 +3838,13 @@
           padding: 18px;
         }
         .refund-calculator-layout,
-        .home-feed-grid {
+        .home-feed-grid,
+        .manager-entry-grid,
+        .manager-content-grid {
           grid-template-columns: 1fr;
+        }
+        .mail-delivery-form {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
         .refund-result-card {
           min-height: 250px;
@@ -3574,9 +3923,17 @@
           grid-column: 1 / -1;
         }
         .customer-code-page-header,
-        .customer-code-result {
+        .customer-code-result,
+        .manager-page-header {
           align-items: flex-start;
           flex-direction: column;
+        }
+        .manager-stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .manager-form-grid.three-columns,
+        .mail-delivery-detail {
+          grid-template-columns: 1fr;
         }
         .customer-code-result-side {
           width: 100%;
@@ -3740,6 +4097,39 @@
         }
         .home-feed-card {
           padding: 14px;
+        }
+        .manager-panel {
+          border-radius: 15px;
+          padding: 15px;
+        }
+        .manager-form-grid,
+        .manager-form-grid.three-columns,
+        .manager-stats,
+        .manager-stats.mail-stats,
+        .mail-delivery-form,
+        .mail-delivery-detail {
+          grid-template-columns: 1fr;
+        }
+        .manager-page-header,
+        .manager-panel-header,
+        .mail-account-head,
+        .expense-record {
+          align-items: stretch;
+          flex-direction: column;
+        }
+        .manager-filters {
+          width: 100%;
+          align-items: stretch;
+          flex-direction: column;
+        }
+        .manager-record-main {
+          grid-template-columns: 1fr auto;
+        }
+        .manager-record-main time {
+          grid-column: 1 / -1;
+        }
+        .manager-record-actions {
+          flex-wrap: wrap;
         }
         .home-customer-code-form > div,
         .customer-code-search-form > div,
