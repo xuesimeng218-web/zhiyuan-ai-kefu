@@ -196,15 +196,25 @@ const KEY = "zy_kb_system_v2",
         );
       }
       function loadDailyExpenses() {
-        return loadManagerDocument(DAILY_EXPENSES_KEY, "records").filter(
-          (record) =>
-            record &&
-            typeof record.id === "string" &&
-            typeof record.groupId === "string" &&
-            Number.isFinite(Number(record.amount)) &&
-            /^\d{4}-\d{2}-\d{2}$/.test(record.date) &&
-            /^\d{2}:\d{2}$/.test(record.time),
-        );
+        return loadManagerDocument(DAILY_EXPENSES_KEY, "records")
+          .filter(
+            (record) =>
+              record &&
+              typeof record.id === "string" &&
+              typeof record.groupId === "string" &&
+              Number.isFinite(Number(record.amount)) &&
+              /^\d{4}-\d{2}-\d{2}$/.test(record.date) &&
+              /^\d{2}:\d{2}$/.test(record.time),
+          )
+          .map((record) => ({
+            ...record,
+            invoiceAvailable: ["unknown", "available", "unavailable"].includes(
+              record.invoiceAvailable,
+            )
+              ? record.invoiceAvailable
+              : "unknown",
+            invoiceIssued: record.invoiceIssued === true,
+          }));
       }
       function loadMailAccounts() {
         return loadManagerDocument(MAIL_ACCOUNTS_KEY, "records").filter(
@@ -247,13 +257,19 @@ const KEY = "zy_kb_system_v2",
         const amount = Number(form?.elements?.namedItem("amount")?.value);
         const date = String(form?.elements?.namedItem("date")?.value || "");
         const time = String(form?.elements?.namedItem("time")?.value || "");
+        const invoiceAvailable = String(
+          form?.elements?.namedItem("invoiceAvailable")?.value || "unknown",
+        );
+        const invoiceIssued =
+          form?.elements?.namedItem("invoiceIssued")?.value === "true";
         const note = String(form?.elements?.namedItem("note")?.value || "").trim();
         if (
           !expenseGroups.some((group) => group.id === groupId) ||
           !Number.isFinite(amount) ||
           amount <= 0 ||
           !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-          !/^\d{2}:\d{2}$/.test(time)
+          !/^\d{2}:\d{2}$/.test(time) ||
+          !["unknown", "available", "unavailable"].includes(invoiceAvailable)
         ) {
           alert("请选择第三方群并填写有效的金额、日期和时间。");
           return;
@@ -266,6 +282,8 @@ const KEY = "zy_kb_system_v2",
             amount: Math.round(amount * 100) / 100,
             date,
             time,
+            invoiceAvailable,
+            invoiceIssued,
             note: note.slice(0, 500),
             createdAt: new Date().toISOString(),
           },
@@ -285,6 +303,11 @@ const KEY = "zy_kb_system_v2",
       }
       function expenseMoney(value) {
         return `¥${Number(value || 0).toFixed(2)}`;
+      }
+      function expenseInvoiceAvailableLabel(value) {
+        if (value === "available") return "可开票";
+        if (value === "unavailable") return "不可开票";
+        return "未确认";
       }
       function copyDailyExpense(id) {
         const record = dailyExpenses.find((item) => item.id === id);
@@ -316,7 +339,7 @@ const KEY = "zy_kb_system_v2",
         return records
           .map(
             (record) =>
-              `<article class="manager-record expense-record"><div class="manager-record-main"><strong>${esc(expenseGroupName(record.groupId))}</strong><span class="expense-amount">${expenseMoney(record.amount)}</span><time datetime="${esc(`${record.date}T${record.time}`)}">${esc(record.date)} ${esc(record.time)}</time>${record.note ? `<p>${esc(record.note)}</p>` : ""}</div><div class="manager-record-actions"><button type="button" class="btn" onclick="copyDailyExpense('${esc(record.id)}')">复制</button><button type="button" class="btn danger" onclick="deleteDailyExpense('${esc(record.id)}')">删除</button></div></article>`,
+              `<article class="manager-record expense-record"><div class="manager-record-main"><strong>${esc(expenseGroupName(record.groupId))}</strong><span class="expense-amount">${expenseMoney(record.amount)}</span><time datetime="${esc(`${record.date}T${record.time}`)}">${esc(record.date)} ${esc(record.time)}</time><div class="expense-invoice-info"><span class="expense-invoice-tag invoice-available-${esc(record.invoiceAvailable)}">可开票：${esc(expenseInvoiceAvailableLabel(record.invoiceAvailable))}</span><span class="expense-invoice-tag ${record.invoiceIssued ? "is-issued" : "is-unissued"}">发票：${record.invoiceIssued ? "已开具" : "未开具"}</span></div>${record.note ? `<p>${esc(record.note)}</p>` : ""}</div><div class="manager-record-actions"><button type="button" class="btn" onclick="copyDailyExpense('${esc(record.id)}')">复制</button><button type="button" class="btn danger" onclick="deleteDailyExpense('${esc(record.id)}')">删除</button></div></article>`,
           )
           .join("");
       }
@@ -348,7 +371,7 @@ const KEY = "zy_kb_system_v2",
           .map((group) => `<option value="${esc(group.id)}">${esc(group.name)}</option>`)
           .join("");
         $("#main").innerHTML =
-          `<div class="manager-page"><header class="manager-page-header"><div><span class="section-kicker">DAILY EXPENSE</span><h1>每日支出记录</h1><p>按第三方群记录和核对每日支出。</p></div><button type="button" class="btn" onclick="showHome()">返回首页</button></header><section class="manager-entry-grid"><form class="manager-panel manager-form" onsubmit="addExpenseGroup(event)"><h2>新增第三方群</h2><label><span>群名称</span><input name="groupName" maxlength="80" placeholder="例如：第三方合作群 A" required></label><button type="submit" class="btn primary">新增群</button></form><form class="manager-panel manager-form expense-entry-form" onsubmit="addDailyExpense(event)"><h2>录入支出</h2><div class="manager-form-grid"><label><span>第三方群</span><select name="groupId" required><option value="">请选择群</option>${groupOptions}</select></label><label><span>支出金额（元）</span><input name="amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" required></label><label><span>日期</span><input name="date" type="date" value="${today}" required></label><label><span>时间</span><input name="time" type="time" value="${localTimeValue()}" required></label><label class="manager-form-wide"><span>备注</span><input name="note" maxlength="500" placeholder="选填"></label></div><button type="submit" class="btn primary"${expenseGroups.length ? "" : " disabled"}>保存支出</button>${expenseGroups.length ? "" : "<small>请先新增第三方群。</small>"}</form></section><section class="manager-stats" aria-label="支出统计"><article><span>今日支出</span><strong>${expenseMoney(sum(dailyExpenses.filter((record) => record.date === today)))}</strong></article><article><span>本月支出</span><strong>${expenseMoney(sum(dailyExpenses.filter((record) => record.date.startsWith(month))))}</strong></article><article><span>今日笔数</span><strong>${dailyExpenses.filter((record) => record.date === today).length}</strong></article><article><span>支出群</span><strong>${new Set(dailyExpenses.map((record) => record.groupId)).size}</strong></article></section><section class="manager-content-grid"><section class="manager-panel"><header class="manager-panel-header"><div><span class="section-kicker">RECORDS</span><h2>支出明细</h2></div><div class="manager-filters"><input type="date" value="${esc(expenseFilters.date)}" aria-label="按日期筛选" onchange="setExpenseFilter('date',this.value)"><select aria-label="按第三方群筛选" onchange="setExpenseFilter('group',this.value)"><option value="all">全部群</option>${expenseGroups.map((group) => `<option value="${esc(group.id)}"${expenseFilters.groupId === group.id ? " selected" : ""}>${esc(group.name)}</option>`).join("")}</select></div></header><div class="manager-record-list">${renderExpenseRows(filtered)}</div></section><aside class="manager-panel group-summary"><header class="manager-panel-header"><div><span class="section-kicker">GROUPS</span><h2>支出群统计</h2></div></header>${groupTotals.length ? groupTotals.map((group) => `<div class="group-summary-row"><span><strong>${esc(group.name)}</strong><small>${group.count} 笔</small></span><b>${expenseMoney(group.total)}</b></div>`).join("") : '<div class="manager-empty compact">暂无群支出</div>'}</aside></section></div>`;
+          `<div class="manager-page"><header class="manager-page-header"><div><span class="section-kicker">DAILY EXPENSE</span><h1>每日支出记录</h1><p>按第三方群记录和核对每日支出。</p></div><button type="button" class="btn" onclick="showHome()">返回首页</button></header><section class="manager-entry-grid"><form class="manager-panel manager-form" onsubmit="addExpenseGroup(event)"><h2>新增第三方群</h2><label><span>群名称</span><input name="groupName" maxlength="80" placeholder="例如：第三方合作群 A" required></label><button type="submit" class="btn primary">新增群</button></form><form class="manager-panel manager-form expense-entry-form" onsubmit="addDailyExpense(event)"><h2>录入支出</h2><div class="manager-form-grid"><label><span>第三方群</span><select name="groupId" required><option value="">请选择群</option>${groupOptions}</select></label><label><span>支出金额（元）</span><input name="amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" required></label><label><span>日期</span><input name="date" type="date" value="${today}" required></label><label><span>时间</span><input name="time" type="time" value="${localTimeValue()}" required></label><label><span>此单是否可开具发票</span><select name="invoiceAvailable"><option value="unknown">未确认</option><option value="available">可开票</option><option value="unavailable">不可开票</option></select></label><label><span>发票是否开具</span><select name="invoiceIssued"><option value="false">未开具</option><option value="true">已开具</option></select></label><label class="manager-form-wide"><span>备注</span><input name="note" maxlength="500" placeholder="选填"></label></div><button type="submit" class="btn primary"${expenseGroups.length ? "" : " disabled"}>保存支出</button>${expenseGroups.length ? "" : "<small>请先新增第三方群。</small>"}</form></section><section class="manager-stats" aria-label="支出统计"><article><span>今日支出</span><strong>${expenseMoney(sum(dailyExpenses.filter((record) => record.date === today)))}</strong></article><article><span>本月支出</span><strong>${expenseMoney(sum(dailyExpenses.filter((record) => record.date.startsWith(month))))}</strong></article><article><span>今日笔数</span><strong>${dailyExpenses.filter((record) => record.date === today).length}</strong></article><article><span>支出群</span><strong>${new Set(dailyExpenses.map((record) => record.groupId)).size}</strong></article></section><section class="manager-content-grid"><section class="manager-panel"><header class="manager-panel-header"><div><span class="section-kicker">RECORDS</span><h2>支出明细</h2></div><div class="manager-filters"><input type="date" value="${esc(expenseFilters.date)}" aria-label="按日期筛选" onchange="setExpenseFilter('date',this.value)"><select aria-label="按第三方群筛选" onchange="setExpenseFilter('group',this.value)"><option value="all">全部群</option>${expenseGroups.map((group) => `<option value="${esc(group.id)}"${expenseFilters.groupId === group.id ? " selected" : ""}>${esc(group.name)}</option>`).join("")}</select></div></header><div class="manager-record-list">${renderExpenseRows(filtered)}</div></section><aside class="manager-panel group-summary"><header class="manager-panel-header"><div><span class="section-kicker">GROUPS</span><h2>支出群统计</h2></div></header>${groupTotals.length ? groupTotals.map((group) => `<div class="group-summary-row"><span><strong>${esc(group.name)}</strong><small>${group.count} 笔</small></span><b>${expenseMoney(group.total)}</b></div>`).join("") : '<div class="manager-empty compact">暂无群支出</div>'}</aside></section></div>`;
         persistUiState();
       }
       function addMailAccount(event) {

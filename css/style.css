@@ -3422,6 +3422,31 @@
         color: #b45309;
         font-weight: 800;
       }
+      .expense-invoice-info {
+        display: flex;
+        grid-column: 1 / -1;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .expense-invoice-tag {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        background: #eceff4;
+        color: #667085;
+        padding: 3px 8px;
+        font-size: 10px;
+        font-weight: 800;
+      }
+      .expense-invoice-tag.invoice-available-available,
+      .expense-invoice-tag.is-issued {
+        background: #def5e9;
+        color: #087b51;
+      }
+      .expense-invoice-tag.invoice-available-unavailable {
+        background: #fff0db;
+        color: #a45a05;
+      }
       .manager-record-actions {
         display: flex;
         flex: 0 0 auto;
