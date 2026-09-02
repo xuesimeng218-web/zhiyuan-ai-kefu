@@ -7304,7 +7304,7 @@ const KEY = "zy_kb_system_v2",
             : "";
         return {
           version: 1,
-          page: ["home", "fav", "recent", "group", "gallery", "customer-codes", "daily-expenses", "mail-accounts"].includes(mode)
+          page: ["home", "fav", "recent", "group", "gallery", "customer-codes", "mail-accounts", "ledger"].includes(mode)
             ? mode
             : "home",
           categoryId,
@@ -7342,7 +7342,7 @@ const KEY = "zy_kb_system_v2",
             typeof parsed !== "object" ||
             Array.isArray(parsed) ||
             parsed.version !== 1 ||
-            !["home", "fav", "recent", "group", "gallery", "customer-codes", "daily-expenses", "mail-accounts"].includes(
+            !["home", "fav", "recent", "group", "gallery", "customer-codes", "mail-accounts", "ledger"].includes(
               parsed.page,
             )
           ) {
@@ -7436,8 +7436,8 @@ const KEY = "zy_kb_system_v2",
             showRecent();
           } else if (state.page === "customer-codes") {
             showCustomerCodeManager();
-          } else if (state.page === "daily-expenses") {
-            renderDailyExpenseManager();
+          } else if (state.page === "ledger") {
+            openLedgerWorkbench();
           } else if (state.page === "mail-accounts") {
             renderMailAccountManager();
           } else if (state.page === "group") {
@@ -7517,12 +7517,14 @@ const KEY = "zy_kb_system_v2",
         }
         mode = m;
         const app = document.querySelector(".app");
+        if (m !== "ledger") globalThis.LedgerWorkbench?.closeAll(true);
         app?.classList.toggle("gallery-mode", m === "gallery");
         app?.classList.toggle("home-mode", m === "home");
         app?.classList.toggle("category-mode", m === "group");
+        app?.classList.toggle("ledger-mode", m === "ledger");
         app?.classList.toggle(
           "customer-code-mode",
-          ["customer-codes", "daily-expenses", "mail-accounts"].includes(m),
+          ["customer-codes", "mail-accounts"].includes(m),
         );
         app?.classList.toggle(
           "home-searching",
@@ -7979,16 +7981,9 @@ const KEY = "zy_kb_system_v2",
         setMode("home");
         renderNav();
         renderList([], "首页");
-        const todayExpenses = dailyExpenses.filter(
-          (record) => record.date === localDateValue(),
-        );
-        const todayExpenseTotal = todayExpenses.reduce(
-          (total, record) => total + Number(record.amount),
-          0,
-        );
         const deliveredMailCount = mailAccounts.filter(isMailDelivered).length;
         $("#main").innerHTML =
-          `<div class="dashboard"><header class="dashboard-heading"><div><span class="section-kicker">客服工作台</span><h1>智源客服知识库</h1><p>统一管理客服话术、产品资料、售后规则和新人培训内容。</p></div><span class="dashboard-date">知识与核算，一站处理</span></header>${renderRefundCalculator()}<section class="home-feed-grid home-shortcut-grid" aria-label="工作管理入口"><section class="home-feed-card home-shortcut expense-shortcut" aria-labelledby="homeExpenseTitle" onclick="renderDailyExpenseManager()"><header><div><span class="home-feed-eyebrow">DAILY EXPENSE</span><h2 id="homeExpenseTitle">每日支出记录</h2></div><button type="button" onclick="event.stopPropagation();renderDailyExpenseManager()">进入管理</button></header><div class="home-shortcut-summary"><span><strong>${expenseMoney(todayExpenseTotal)}</strong><small>今日支出</small></span><span><strong>${todayExpenses.length}</strong><small>今日笔数</small></span></div><p>按日期与第三方群记录、筛选和统计支出。</p></section><section class="home-feed-card home-shortcut mail-shortcut" aria-labelledby="homeMailTitle" onclick="renderMailAccountManager()"><header><div><span class="home-feed-eyebrow">MAIL ACCOUNT</span><h2 id="homeMailTitle">成品号邮箱管理</h2></div><button type="button" onclick="event.stopPropagation();renderMailAccountManager()">进入管理</button></header><div class="home-shortcut-summary"><span><strong>${mailAccounts.length - deliveredMailCount}</strong><small>未交付</small></span><span><strong>${deliveredMailCount}</strong><small>已交付</small></span></div><p>登记邮箱来源，并在交付后补全客户信息。</p></section><section class="home-feed-card home-shortcut customer-code-shortcut" aria-labelledby="homeCustomerCodeTitle" onclick="showCustomerCodeManager()"><header><div><span class="home-feed-eyebrow">CUSTOMER CODE</span><h2 id="homeCustomerCodeTitle">客户编码</h2></div><button type="button" onclick="event.stopPropagation();showCustomerCodeManager()">进入管理</button></header><form class="home-customer-code-form" onsubmit="handleHomeCustomerCodeSearch(event)" onclick="event.stopPropagation()"><label for="homeCustomerCodeInput">快捷查询</label><div><input id="homeCustomerCodeInput" type="text" placeholder="输入客户编码" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="submit">查询</button></div><small>严格格式：C＋6位数字</small></form></section></section></div>`;
+          `<div class="dashboard"><header class="dashboard-heading"><div><span class="section-kicker">客服工作台</span><h1>智源客服知识库</h1><p>统一管理客服话术、产品资料、售后规则和新人培训内容。</p></div><span class="dashboard-date">知识与核算，一站处理</span></header>${renderRefundCalculator()}<section class="home-feed-grid home-shortcut-grid" aria-label="工作管理入口"><section class="home-feed-card home-shortcut expense-shortcut" aria-labelledby="homeLedgerTitle" onclick="openLedgerWorkbench()"><header><div><span class="home-feed-eyebrow">LEDGER WORKBENCH</span><h2 id="homeLedgerTitle">记账台</h2></div><button type="button" onclick="event.stopPropagation();openLedgerWorkbench()">进入管理</button></header><div class="home-shortcut-summary"><span><strong>收支</strong><small>月度概览</small></span><span><strong>明细</strong><small>收入与支出</small></span></div><p>集中登记收入和支出，实时查看月度结余。</p></section><section class="home-feed-card home-shortcut mail-shortcut" aria-labelledby="homeMailTitle" onclick="renderMailAccountManager()"><header><div><span class="home-feed-eyebrow">MAIL ACCOUNT</span><h2 id="homeMailTitle">成品号邮箱管理</h2></div><button type="button" onclick="event.stopPropagation();renderMailAccountManager()">进入管理</button></header><div class="home-shortcut-summary"><span><strong>${mailAccounts.length - deliveredMailCount}</strong><small>未交付</small></span><span><strong>${deliveredMailCount}</strong><small>已交付</small></span></div><p>登记邮箱来源，并在交付后补全客户信息。</p></section><section class="home-feed-card home-shortcut customer-code-shortcut" aria-labelledby="homeCustomerCodeTitle" onclick="showCustomerCodeManager()"><header><div><span class="home-feed-eyebrow">CUSTOMER CODE</span><h2 id="homeCustomerCodeTitle">客户编码</h2></div><button type="button" onclick="event.stopPropagation();showCustomerCodeManager()">进入管理</button></header><form class="home-customer-code-form" onsubmit="handleHomeCustomerCodeSearch(event)" onclick="event.stopPropagation()"><label for="homeCustomerCodeInput">快捷查询</label><div><input id="homeCustomerCodeInput" type="text" placeholder="输入客户编码" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="submit">查询</button></div><small>严格格式：C＋6位数字</small></form></section></section></div>`;
         calc();
         persistUiState();
       }
