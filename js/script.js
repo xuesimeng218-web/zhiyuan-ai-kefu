@@ -72,6 +72,8 @@ const KEY = "zy_kb_system_v2",
       let dailyExpenses = loadDailyExpenses();
       let expenseFilters = { date: "", groupId: "all" };
       let mailAccounts = loadMailAccounts();
+      let mailBatchDraft = null;
+      let mailSourceBatchFilter = "all";
       let mailStatusFilter =
         globalThis.RechargeCodes?.getMailStatusFilter?.() || "all";
       globalThis.RechargeCodes?.configure?.({
@@ -383,6 +385,171 @@ const KEY = "zy_kb_system_v2",
           `<div class="manager-page"><header class="manager-page-header"><div><span class="section-kicker">DAILY EXPENSE</span><h1>每日支出记录</h1><p>按第三方群记录和核对每日支出。</p></div><button type="button" class="btn" onclick="showHome()">返回首页</button></header><section class="manager-entry-grid"><form class="manager-panel manager-form" onsubmit="addExpenseGroup(event)"><h2>新增第三方群</h2><label><span>群名称</span><input name="groupName" maxlength="80" placeholder="例如：第三方合作群 A" required></label><button type="submit" class="btn primary">新增群</button></form><form class="manager-panel manager-form expense-entry-form" onsubmit="addDailyExpense(event)"><h2>录入支出</h2><div class="manager-form-grid"><label><span>第三方群</span><select name="groupId" required><option value="">请选择群</option>${groupOptions}</select></label><label><span>支出金额（元）</span><input name="amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" required></label><label><span>日期</span><input name="date" type="date" value="${today}" required></label><label><span>时间</span><input name="time" type="time" value="${localTimeValue()}" required></label><label><span>此单是否可开具发票</span><select name="invoiceAvailable"><option value="unknown">未确认</option><option value="available">可开票</option><option value="unavailable">不可开票</option></select></label><label><span>发票是否开具</span><select name="invoiceIssued"><option value="false">未开具</option><option value="true">已开具</option></select></label><label class="manager-form-wide"><span>备注</span><input name="note" maxlength="500" placeholder="选填"></label></div><button type="submit" class="btn primary"${expenseGroups.length ? "" : " disabled"}>保存支出</button>${expenseGroups.length ? "" : "<small>请先新增第三方群。</small>"}</form></section><section class="manager-stats" aria-label="支出统计"><article><span>今日支出</span><strong>${expenseMoney(sum(dailyExpenses.filter((record) => record.date === today)))}</strong></article><article><span>本月支出</span><strong>${expenseMoney(sum(dailyExpenses.filter((record) => record.date.startsWith(month))))}</strong></article><article><span>今日笔数</span><strong>${dailyExpenses.filter((record) => record.date === today).length}</strong></article><article><span>支出群</span><strong>${new Set(dailyExpenses.map((record) => record.groupId)).size}</strong></article></section><section class="manager-content-grid"><section class="manager-panel"><header class="manager-panel-header"><div><span class="section-kicker">RECORDS</span><h2>支出明细</h2></div><div class="manager-filters"><input type="date" value="${esc(expenseFilters.date)}" aria-label="按日期筛选" onchange="setExpenseFilter('date',this.value)"><select aria-label="按第三方群筛选" onchange="setExpenseFilter('group',this.value)"><option value="all">全部群</option>${expenseGroups.map((group) => `<option value="${esc(group.id)}"${expenseFilters.groupId === group.id ? " selected" : ""}>${esc(group.name)}</option>`).join("")}</select></div></header><div class="manager-record-list">${renderExpenseRows(filtered)}</div></section><aside class="manager-panel group-summary"><header class="manager-panel-header"><div><span class="section-kicker">GROUPS</span><h2>支出群统计</h2></div></header>${groupTotals.length ? groupTotals.map((group) => `<div class="group-summary-row"><span><strong>${esc(group.name)}</strong><small>${group.count} 笔</small></span><b>${expenseMoney(group.total)}</b></div>`).join("") : '<div class="manager-empty compact">暂无群支出</div>'}</aside></section></div>`;
         persistUiState();
       }
+      function isValidMailAddress(value) {
+        return typeof value === "string" &&
+          value.length <= 200 &&
+          /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) &&
+          !/[\u0000-\u001F\u007F]/.test(value);
+      }
+      function isValidMailPassword(value) {
+        return typeof value === "string" &&
+          value.length <= 200 &&
+          value.trim().length > 0 &&
+          !/[\r\n\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(value);
+      }
+      function readMailAccountsFreshStrict() {
+        const raw = localStorage.getItem(MAIL_ACCOUNTS_KEY);
+        if (raw === null) return [];
+        const documentValue = JSON.parse(raw);
+        if (!documentValue || typeof documentValue !== "object" || documentValue.version !== 1 || !Array.isArray(documentValue.records)) {
+          throw new Error("邮箱数据结构异常，已停止批量录入。");
+        }
+        const ids = new Set();
+        const accounts = new Set();
+        for (const record of documentValue.records) {
+          if (!record || typeof record.id !== "string" || typeof record.account !== "string" || typeof record.originalPassword !== "string" || typeof record.sourceBatch !== "string") {
+            throw new Error("邮箱记录存在无法识别的数据，已停止批量录入。");
+          }
+          const key = record.account.trim().toLocaleLowerCase();
+          if (!record.id || !key || ids.has(record.id) || accounts.has(key)) {
+            throw new Error("邮箱记录存在重复或无效标识，已停止批量录入。");
+          }
+          ids.add(record.id);
+          accounts.add(key);
+        }
+        return documentValue.records;
+      }
+      function analyzeMailBatch(text, sourceBatch, existingRecords = mailAccounts) {
+        const existing = new Set(existingRecords.map((record) => record.account.trim().toLocaleLowerCase()));
+        const seen = new Set();
+        const additions = [];
+        const errors = [];
+        let empty = 0;
+        const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+        lines.forEach((rawLine, index) => {
+          const lineNumber = index + 1;
+          if (!rawLine.trim()) { empty += 1; return; }
+          const separator = rawLine.indexOf("---");
+          if (separator < 0) {
+            errors.push({ lineNumber, reason: "缺少分隔符 ---", kind: "format" });
+            return;
+          }
+          const account = rawLine.slice(0, separator).trim();
+          const originalPassword = rawLine.slice(separator + 3);
+          const key = account.toLocaleLowerCase();
+          if (!isValidMailAddress(account)) {
+            errors.push({ lineNumber, reason: "邮箱格式无效", kind: "format" });
+            return;
+          }
+          if (!isValidMailPassword(originalPassword)) {
+            errors.push({ lineNumber, reason: "原密码为空、过长或包含控制字符", kind: "format", account });
+            return;
+          }
+          if (seen.has(key)) {
+            errors.push({ lineNumber, reason: "本次文本内邮箱重复", kind: "batch-duplicate", account });
+            return;
+          }
+          seen.add(key);
+          if (existing.has(key)) {
+            errors.push({ lineNumber, reason: "该邮箱账号已存在", kind: "existing-duplicate", account });
+            return;
+          }
+          additions.push({ lineNumber, account, originalPassword });
+        });
+        return { text, sourceBatch, additions, errors, empty };
+      }
+      function mailBatchSignature(preview) {
+        return JSON.stringify([
+          preview.sourceBatch,
+          preview.additions.map((item) => [item.lineNumber, item.account.toLocaleLowerCase()]),
+          preview.errors.map((item) => [item.lineNumber, item.reason]),
+          preview.empty,
+        ]);
+      }
+      function maskMailAccount(account) {
+        const [local, domain] = String(account || "").split("@");
+        if (!domain) return "邮箱格式无效";
+        const visible = local.slice(0, Math.min(2, local.length));
+        return `${visible}${"•".repeat(Math.max(2, local.length - visible.length))}@${domain}`;
+      }
+      function showMailBatchModal(html) {
+        document.querySelector("#mailBatchModal")?.remove();
+        const backdrop = document.createElement("div");
+        backdrop.id = "mailBatchModal";
+        backdrop.className = "recharge-code-modal-backdrop mail-batch-modal-backdrop";
+        backdrop.innerHTML = html;
+        document.body.appendChild(backdrop);
+        requestAnimationFrame(() => backdrop.classList.add("is-open"));
+        backdrop.querySelector("input, textarea, button")?.focus();
+      }
+      function closeMailBatchModal(clearDraft = true) {
+        document.querySelector("#mailBatchModal")?.remove();
+        if (clearDraft) mailBatchDraft = null;
+      }
+      function openMailBatchModal() {
+        const draft = mailBatchDraft || { text: "", sourceBatch: "" };
+        showMailBatchModal(`<section class="recharge-code-modal mail-batch-modal" role="dialog" aria-modal="true" aria-labelledby="mailBatchTitle"><header><div><span class="section-kicker">BATCH ENTRY</span><h2 id="mailBatchTitle">批量录入邮箱账号</h2></div><button type="button" onclick="closeMailBatchModal()" aria-label="关闭">×</button></header><form class="mail-batch-form" onsubmit="previewMailBatch(event)"><div class="recharge-code-form-grid mail-batch-form-grid"><label><span>统一来源批次</span><input name="sourceBatch" value="${esc(draft.sourceBatch)}" maxlength="100" placeholder="例如：2026-09-A" required></label><label class="is-wide"><span>邮箱账号和原密码（每行一条）</span><textarea name="accounts" maxlength="200000" spellcheck="false" placeholder="name@example.com---原密码" required>${esc(draft.text)}</textarea><small>格式：邮箱---原密码；自动忽略空行。密码不会在预览中显示。</small></label></div><p class="mail-batch-form-error" role="alert"></p><footer><button type="button" class="btn" onclick="closeMailBatchModal()">取消</button><button type="submit" class="btn primary">检查并预览</button></footer></form></section>`);
+      }
+      function renderMailBatchPreview(message = "") {
+        const preview = mailBatchDraft?.preview;
+        if (!preview) return;
+        const batchDuplicates = preview.errors.filter((item) => item.kind === "batch-duplicate").length;
+        const existingDuplicates = preview.errors.filter((item) => item.kind === "existing-duplicate").length;
+        const invalid = preview.errors.length - batchDuplicates - existingDuplicates;
+        const validRows = preview.additions.map((item) => `<li><span>第 ${item.lineNumber} 行</span><strong>${esc(maskMailAccount(item.account))}</strong></li>`).join("");
+        const errorRows = preview.errors.map((item) => `<li><span>第 ${item.lineNumber} 行</span><strong>${esc(item.reason)}</strong>${item.account ? `<small>${esc(maskMailAccount(item.account))}</small>` : ""}</li>`).join("");
+        showMailBatchModal(`<section class="recharge-code-modal mail-batch-modal" role="dialog" aria-modal="true" aria-labelledby="mailBatchPreviewTitle"><header><div><span class="section-kicker">BATCH PREVIEW</span><h2 id="mailBatchPreviewTitle">邮箱录入预览</h2></div><button type="button" onclick="closeMailBatchModal()" aria-label="关闭">×</button></header>${message ? `<p class="mail-batch-warning" role="alert">${esc(message)}</p>` : ""}<div class="recharge-code-preview-stats mail-batch-preview-stats"><span>合法记录<strong>${preview.additions.length}</strong></span><span>空行<strong>${preview.empty}</strong></span><span>批内重复<strong>${batchDuplicates}</strong></span><span>已有重复<strong>${existingDuplicates}</strong></span><span>格式错误<strong>${invalid}</strong></span></div><p class="mail-batch-summary">来源批次：${esc(preview.sourceBatch)}</p>${validRows ? `<section class="mail-batch-preview-list"><h3>可保存记录</h3><ul>${validRows}</ul></section>` : ""}${errorRows ? `<section class="mail-batch-error-list"><h3>错误记录（不会写入）</h3><ul>${errorRows}</ul></section>` : ""}<p class="recharge-code-security-note">确认时会重新读取邮箱数据并再次校验；只进行一次安全追加，不保存原始批量文本。</p><footer><button type="button" class="btn" onclick="openMailBatchModal()">返回修改</button><button type="button" class="btn primary" onclick="confirmMailBatch()"${preview.additions.length ? "" : " disabled"}>确认保存 ${preview.additions.length} 条</button></footer></section>`);
+      }
+      function previewMailBatch(event) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const text = String(form?.elements?.namedItem("accounts")?.value || "");
+        const sourceBatch = String(form?.elements?.namedItem("sourceBatch")?.value || "").trim();
+        const error = form?.querySelector(".mail-batch-form-error");
+        if (!sourceBatch || sourceBatch.length > 100 || /[\u0000-\u001F\u007F]/.test(sourceBatch) || !text) {
+          if (error) error.textContent = "请填写有效的来源批次和批量账号文本。";
+          return;
+        }
+        const preview = analyzeMailBatch(text, sourceBatch);
+        mailBatchDraft = { text, sourceBatch, preview, signature: mailBatchSignature(preview) };
+        renderMailBatchPreview();
+      }
+      function confirmMailBatch() {
+        if (!mailBatchDraft?.preview?.additions.length) return;
+        let fresh;
+        try {
+          fresh = readMailAccountsFreshStrict();
+        } catch (error) {
+          renderMailBatchPreview(error.message || "邮箱数据读取失败，未写入任何记录。");
+          return;
+        }
+        const refreshed = analyzeMailBatch(mailBatchDraft.text, mailBatchDraft.sourceBatch, fresh);
+        const refreshedSignature = mailBatchSignature(refreshed);
+        mailAccounts = fresh;
+        if (refreshedSignature !== mailBatchDraft.signature) {
+          mailBatchDraft = { ...mailBatchDraft, preview: refreshed, signature: refreshedSignature };
+          renderMailBatchPreview("现有邮箱数据已变化，预览已刷新，请重新确认。");
+          return;
+        }
+        const ids = new Set(fresh.map((record) => record.id));
+        const now = new Date().toISOString();
+        const additions = refreshed.additions.map((item) => {
+          let id;
+          do { id = createManagerId("mail"); } while (ids.has(id));
+          ids.add(id);
+          return {
+            id, account: item.account, originalPassword: item.originalPassword, sourceBatch: mailBatchDraft.sourceBatch,
+            customer: "", newPassword: "", deliveryDate: "", deliveredAt: "", createdAt: now,
+          };
+        });
+        const nextRecords = [...fresh, ...additions];
+        if (!saveManagerDocument(MAIL_ACCOUNTS_KEY, "records", nextRecords)) return;
+        mailAccounts = nextRecords;
+        mailBatchDraft = null;
+        closeMailBatchModal();
+        renderMailAccountManager();
+        toast(`已批量录入 ${additions.length} 个邮箱账号`);
+      }
       function addMailAccount(event) {
         event.preventDefault();
         const form = event.currentTarget;
@@ -404,6 +571,7 @@ const KEY = "zy_kb_system_v2",
             customer: "",
             newPassword: "",
             deliveryDate: "",
+            deliveredAt: "",
             createdAt: new Date().toISOString(),
           },
         ];
@@ -412,30 +580,109 @@ const KEY = "zy_kb_system_v2",
         renderMailAccountManager();
         toast("邮箱账号已录入");
       }
-      function deliverMailAccount(event, id) {
+      function showMailEditModal(html) {
+        document.querySelector("#mailEditModal")?.remove();
+        const backdrop = document.createElement("div");
+        backdrop.id = "mailEditModal";
+        backdrop.className = "recharge-code-modal-backdrop mail-edit-modal-backdrop";
+        backdrop.innerHTML = html;
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) closeMailEditModal();
+        });
+        document.body.appendChild(backdrop);
+        requestAnimationFrame(() => backdrop.classList.add("is-open"));
+        backdrop.querySelector("input, button, select")?.focus();
+      }
+      function closeMailEditModal() {
+        document.querySelector("#mailEditModal")?.remove();
+      }
+      function openMailEditModal(id) {
+        const record = mailAccounts.find((item) => item.id === id);
+        if (!record) return;
+        const delivered = isMailDelivered(record);
+        showMailEditModal(`<section class="recharge-code-modal mail-edit-modal" role="dialog" aria-modal="true" aria-labelledby="mailEditTitle"><header><div><span class="section-kicker">ACCOUNT EDITOR</span><h2 id="mailEditTitle">编辑邮箱账号</h2></div><button type="button" onclick="closeMailEditModal()" aria-label="关闭">×</button></header><form class="mail-edit-form" onsubmit="saveMailAccountEdit(event,'${esc(record.id)}')"><div class="mail-edit-grid"><label class="mail-edit-account"><span>邮箱账号</span><div class="mail-edit-field-actions"><input name="account" type="email" maxlength="200" value="${esc(record.account)}" required><button type="button" class="btn" onclick="copyMailEditField('account')">复制账号</button></div></label><label><span>来源批次</span><input name="sourceBatch" maxlength="100" value="${esc(record.sourceBatch || "")}" required></label><label><span>原密码</span><div class="mail-edit-field-actions"><input name="originalPassword" type="password" maxlength="200" value="${esc(record.originalPassword)}" required><button type="button" class="btn" onclick="toggleMailEditSecret(this,'originalPassword')">查看</button><button type="button" class="btn" onclick="copyMailEditField('originalPassword')">复制</button></div></label><label><span>新密码</span><div class="mail-edit-field-actions"><input name="newPassword" type="password" maxlength="200" value="${esc(record.newPassword || "")}"><button type="button" class="btn" onclick="toggleMailEditSecret(this,'newPassword')">查看</button><button type="button" class="btn" onclick="copyMailEditField('newPassword')">复制</button></div></label><label><span>使用客户</span><input name="customer" maxlength="100" value="${esc(record.customer || "")}"></label><label><span>交付日期</span><input name="deliveryDate" type="date" value="${esc(record.deliveryDate || "")}"></label><label><span>交付状态</span><select name="deliveryStatus"><option value="pending"${delivered ? "" : " selected"}>未交付</option><option value="delivered"${delivered ? " selected" : ""}>交付</option></select></label></div><p class="mail-edit-hint">选择“交付”时，使用客户、新密码和交付日期必须填写完整。</p><p class="mail-edit-error" role="alert"></p><footer><button type="button" class="btn" onclick="closeMailEditModal()">取消</button><button type="submit" class="btn primary">保存修改</button></footer></form></section>`);
+      }
+      function toggleMailEditSecret(button, field) {
+        const input = document.querySelector(`#mailEditModal [name="${field}"]`);
+        if (!input) return;
+        const reveal = input.type === "password";
+        input.type = reveal ? "text" : "password";
+        button.textContent = reveal ? "隐藏" : "查看";
+      }
+      function copyMailEditField(field) {
+        if (!new Set(["account", "originalPassword", "newPassword"]).has(field)) return;
+        const input = document.querySelector(`#mailEditModal [name="${field}"]`);
+        if (input) copyText(input.value);
+      }
+      function saveMailAccountEdit(event, id) {
         event.preventDefault();
         const form = event.currentTarget;
+        const account = String(form?.elements?.namedItem("account")?.value || "").trim();
+        const originalPassword = String(form?.elements?.namedItem("originalPassword")?.value || "");
+        const sourceBatch = String(form?.elements?.namedItem("sourceBatch")?.value || "").trim();
         const customer = String(form?.elements?.namedItem("customer")?.value || "").trim();
         const newPassword = String(form?.elements?.namedItem("newPassword")?.value || "");
         const deliveryDate = String(form?.elements?.namedItem("deliveryDate")?.value || "");
-        if (!customer || !newPassword || !/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return;
-        const nextRecords = mailAccounts.map((record) =>
+        const deliveryStatus = String(form?.elements?.namedItem("deliveryStatus")?.value || "");
+        const error = form?.querySelector(".mail-edit-error");
+        const showError = (message) => { if (error) error.textContent = message; };
+        if (!isValidMailAddress(account)) return showError("请填写有效的邮箱账号。");
+        if (!isValidMailPassword(originalPassword)) return showError("原密码不能为空、不能超过 200 字符或包含控制字符。");
+        if (!sourceBatch || sourceBatch.length > 100 || /[\u0000-\u001F\u007F]/.test(sourceBatch)) return showError("请填写有效的来源批次。");
+        if (customer.length > 100 || /[\u0000-\u001F\u007F]/.test(customer)) return showError("使用客户内容无效或过长。");
+        if (newPassword && !isValidMailPassword(newPassword)) return showError("新密码不能超过 200 字符或包含控制字符。");
+        if (deliveryDate && !/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return showError("请填写有效的交付日期。");
+        if (!new Set(["pending", "delivered"]).has(deliveryStatus)) return showError("请选择有效的交付状态。");
+        if (deliveryStatus === "delivered" && (!customer || !newPassword || !deliveryDate)) {
+          return showError("保存为交付状态前，请完整填写使用客户、新密码和交付日期。");
+        }
+        let fresh;
+        try {
+          fresh = readMailAccountsFreshStrict();
+        } catch (readError) {
+          return showError(readError.message || "邮箱数据读取失败，未保存修改。");
+        }
+        const existing = fresh.find((record) => record.id === id);
+        if (!existing) return showError("该邮箱记录已变化或不存在，请关闭后刷新重试。");
+        if (fresh.some((record) => record.id !== id && record.account.trim().toLocaleLowerCase() === account.toLocaleLowerCase())) {
+          return showError("该邮箱账号已存在。");
+        }
+        const nextRecords = fresh.map((record) =>
           record.id === id
-            ? { ...record, customer, newPassword, deliveryDate, deliveredAt: new Date().toISOString() }
+            ? {
+              ...record,
+              account,
+              originalPassword,
+              sourceBatch,
+              customer,
+              newPassword,
+              deliveryDate,
+              deliveredAt: deliveryStatus === "delivered"
+                ? (isMailDelivered(existing) && existing.deliveredAt ? existing.deliveredAt : new Date().toISOString())
+                : "",
+            }
             : record,
         );
         if (!saveManagerDocument(MAIL_ACCOUNTS_KEY, "records", nextRecords)) return;
         mailAccounts = nextRecords;
+        closeMailEditModal();
         renderMailAccountManager();
-        toast("交付信息已补录");
+        toast("邮箱账号已更新");
       }
       function setMailStatusFilter(value) {
         mailStatusFilter = ["all", "pending", "delivered"].includes(value) ? value : "all";
         globalThis.RechargeCodes?.setMailStatusFilter?.(mailStatusFilter);
         renderMailAccountManager();
       }
+      function setMailSourceBatchFilter(value) {
+        mailSourceBatchFilter = value === "all" || mailAccounts.some((record) => record.sourceBatch === value)
+          ? value
+          : "all";
+        renderMailAccountManager();
+      }
       function setMailManagerTab(value) {
         const nextTab = value === "recharge" ? "recharge" : "mail";
+        if (nextTab !== "mail") closeMailEditModal();
         globalThis.RechargeCodes?.setActiveTab?.(nextTab);
         renderMailAccountManager();
       }
@@ -444,7 +691,11 @@ const KEY = "zy_kb_system_v2",
         if (!record || !["account", "originalPassword"].includes(field)) return;
         copyText(record[field]);
       }
+      function maskMailPassword(value) {
+        return "•".repeat(Math.min(10, Math.max(6, String(value || "").length)));
+      }
       function isMailDelivered(record) {
+        if (Object.prototype.hasOwnProperty.call(record, "deliveredAt")) return Boolean(record.deliveredAt);
         return Boolean(record.customer && record.newPassword && record.deliveryDate);
       }
       function renderMailRows(records) {
@@ -454,7 +705,7 @@ const KEY = "zy_kb_system_v2",
         return records
           .map((record) => {
             const delivered = isMailDelivered(record);
-            return `<article class="manager-record mail-record"><div class="mail-account-head"><div><span class="manager-status ${delivered ? "is-delivered" : "is-pending"}">${delivered ? "已交付" : "未交付"}</span><strong>${esc(record.account)}</strong><small>来源批次：${esc(record.sourceBatch)}</small></div><div class="manager-record-actions"><button type="button" class="btn" onclick="copyMailField('${esc(record.id)}','account')">复制账号</button><button type="button" class="btn" onclick="copyMailField('${esc(record.id)}','originalPassword')">复制原密码</button></div></div>${delivered ? `<dl class="mail-delivery-detail"><div><dt>使用客户</dt><dd>${esc(record.customer)}</dd></div><div><dt>新密码</dt><dd>${esc(record.newPassword)}</dd></div><div><dt>交付日期</dt><dd>${esc(record.deliveryDate)}</dd></div></dl>` : `<form class="mail-delivery-form" onsubmit="deliverMailAccount(event,'${esc(record.id)}')"><label><span>使用客户</span><input name="customer" maxlength="100" required></label><label><span>新密码</span><input name="newPassword" maxlength="200" required></label><label><span>交付日期</span><input name="deliveryDate" type="date" value="${localDateValue()}" required></label><button type="submit" class="btn primary">确认交付</button></form>`}</article>`;
+            return `<article class="mail-record mail-record-compact"><div class="mail-record-main-row"><div class="mail-record-cell mail-account-cell" data-label="邮箱"><strong title="${esc(record.account)}">${esc(record.account)}</strong></div><div class="mail-record-cell mail-password-cell" data-label="原密码"><code>${esc(maskMailPassword(record.originalPassword))}</code></div><div class="mail-record-cell mail-password-cell" data-label="新密码"><code>${record.newPassword ? esc(maskMailPassword(record.newPassword)) : "待补录"}</code></div><div class="mail-record-cell" data-label="使用客户"><span>${esc(record.customer || "待补录")}</span></div><div class="mail-record-cell" data-label="交付日期"><span>${esc(record.deliveryDate || "待补录")}</span></div><div class="mail-record-cell mail-status-cell" data-label="状态"><span class="manager-status ${delivered ? "is-delivered" : "is-pending"}">${delivered ? "交付" : "未交付"}</span></div><div class="mail-record-cell mail-operation-cell" data-label="编辑"><button type="button" class="btn" onclick="openMailEditModal('${esc(record.id)}')">编辑</button></div></div></article>`;
           })
           .join("");
       }
@@ -465,14 +716,17 @@ const KEY = "zy_kb_system_v2",
         renderNav();
         renderList([], "成品号邮箱/卡密管理");
         const activeTab = globalThis.RechargeCodes?.getActiveTab?.() || "mail";
+        const sourceBatches = [...new Set(mailAccounts.map((record) => record.sourceBatch).filter(Boolean))]
+          .sort((a, b) => a.localeCompare(b, "zh-CN"));
         const records = [...mailAccounts]
           .filter((record) =>
-            mailStatusFilter === "all" ||
-            (mailStatusFilter === "delivered" ? isMailDelivered(record) : !isMailDelivered(record)),
+            (mailStatusFilter === "all" ||
+              (mailStatusFilter === "delivered" ? isMailDelivered(record) : !isMailDelivered(record))) &&
+            (mailSourceBatchFilter === "all" || record.sourceBatch === mailSourceBatchFilter),
           )
           .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
         const deliveredCount = mailAccounts.filter(isMailDelivered).length;
-        const mailContent = `<div class="mail-manager-pane" role="tabpanel" aria-labelledby="mailManagerMailTab"><section class="manager-panel"><form class="manager-form mail-entry-form" onsubmit="addMailAccount(event)"><h2>录入邮箱账号</h2><div class="manager-form-grid three-columns"><label><span>邮箱账号</span><input name="account" type="email" maxlength="200" autocomplete="off" required></label><label><span>原密码</span><input name="originalPassword" maxlength="200" autocomplete="new-password" required></label><label><span>来源批次</span><input name="sourceBatch" maxlength="100" placeholder="例如：2026-08-A" required></label></div><button type="submit" class="btn primary">保存账号</button></form></section><section class="manager-stats mail-stats"><article><span>全部账号</span><strong>${mailAccounts.length}</strong></article><article><span>未交付</span><strong>${mailAccounts.length - deliveredCount}</strong></article><article><span>已交付</span><strong>${deliveredCount}</strong></article></section><section class="manager-panel"><header class="manager-panel-header"><div><span class="section-kicker">ACCOUNTS</span><h2>邮箱列表</h2></div><select aria-label="按交付状态筛选" onchange="setMailStatusFilter(this.value)"><option value="all"${mailStatusFilter === "all" ? " selected" : ""}>全部状态</option><option value="pending"${mailStatusFilter === "pending" ? " selected" : ""}>未交付</option><option value="delivered"${mailStatusFilter === "delivered" ? " selected" : ""}>已交付</option></select></header><div class="manager-record-list mail-record-list">${renderMailRows(records)}</div></section></div>`;
+        const mailContent = `<div class="mail-manager-pane" role="tabpanel" aria-labelledby="mailManagerMailTab"><section class="manager-panel"><form class="manager-form mail-entry-form" onsubmit="addMailAccount(event)"><div class="mail-entry-heading"><h2>录入邮箱账号</h2><button type="button" class="btn" onclick="openMailBatchModal()">批量录入</button></div><div class="manager-form-grid three-columns"><label><span>邮箱账号</span><input name="account" type="email" maxlength="200" autocomplete="off" required></label><label><span>原密码</span><input name="originalPassword" maxlength="200" autocomplete="new-password" required></label><label><span>来源批次</span><input name="sourceBatch" maxlength="100" placeholder="例如：2026-08-A" required></label></div><button type="submit" class="btn primary">保存账号</button></form></section><section class="manager-stats mail-stats"><article><span>全部账号</span><strong>${mailAccounts.length}</strong></article><article><span>未交付</span><strong>${mailAccounts.length - deliveredCount}</strong></article><article><span>已交付</span><strong>${deliveredCount}</strong></article></section><section class="manager-panel mail-list-panel"><header class="manager-panel-header"><div><span class="section-kicker">ACCOUNTS</span><h2>邮箱列表</h2></div><div class="mail-list-filters"><select aria-label="按交付状态筛选" onchange="setMailStatusFilter(this.value)"><option value="all"${mailStatusFilter === "all" ? " selected" : ""}>全部状态</option><option value="pending"${mailStatusFilter === "pending" ? " selected" : ""}>未交付</option><option value="delivered"${mailStatusFilter === "delivered" ? " selected" : ""}>已交付</option></select><select aria-label="按来源批次筛选" onchange="setMailSourceBatchFilter(this.value)"><option value="all">全部批次</option>${sourceBatches.map((batch) => `<option value="${esc(batch)}"${mailSourceBatchFilter === batch ? " selected" : ""}>${esc(batch)}</option>`).join("")}</select></div></header><div class="mail-record-list-head" aria-hidden="true"><span>邮箱</span><span>原密码</span><span>新密码</span><span>使用客户</span><span>交付日期</span><span>状态</span><span>编辑</span></div><div class="manager-record-list mail-record-list">${renderMailRows(records)}</div></section></div>`;
         const rechargeContent = globalThis.RechargeCodes?.renderPane?.() ||
           '<section class="manager-panel recharge-code-error" role="alert">卡密模块加载失败，已停止所有卡密操作。</section>';
         $("#main").innerHTML =
@@ -8450,6 +8704,8 @@ const KEY = "zy_kb_system_v2",
       });
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
+          closeMailBatchModal();
+          closeMailEditModal();
           closeImageViewer();
           closeGalleryMenus();
           closeGalleryUploadDialog();
