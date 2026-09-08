@@ -8,7 +8,7 @@
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>智源客服知识库</title>
-    <link rel="stylesheet" href="css/style.css?v=20260905-5" />
+    <link rel="stylesheet" href="css/style.css?v=20260907-1" />
     <link rel="manifest" href="manifest.webmanifest" />
     <meta name="theme-color" content="#f8faff" />
     <link rel="icon" href="icon.svg" type="image/svg+xml" />
@@ -34,9 +34,10 @@
           </div>
           <nav class="ledger-nav" aria-label="记账台导航">
             <button class="navbtn" type="button" onclick="showHome()">← 返回知识库首页</button>
-            <button class="navbtn" type="button" data-ledger-view="overview" onclick="openLedgerWorkbench('overview')">▦ 账单概览</button>
-            <button class="navbtn" type="button" data-ledger-view="expenses" onclick="openLedgerWorkbench('expenses')">↗ 支出明细</button>
-            <button class="navbtn" type="button" data-ledger-view="income" onclick="openLedgerWorkbench('income')">↙ 收入明细</button>
+            <button class="navbtn" type="button" data-ledger-view="overview" onclick="openLedgerWorkbench('overview')">▦ 记账概览</button>
+            <button class="navbtn" type="button" data-ledger-view="manual" onclick="openLedgerWorkbench('manual')">✎ 手动记账</button>
+            <button class="navbtn" type="button" data-ledger-view="import" onclick="openLedgerWorkbench('import')">⇩ 流水导入</button>
+            <button class="navbtn" type="button" data-ledger-view="data" onclick="openLedgerWorkbench('data')">⚙ 数据管理</button>
           </nav>
         </div>
         <section class="category-section" aria-label="知识分类">
@@ -96,9 +97,9 @@
     <script src="js/search.js?v=20260801-3"></script>
     <script src="vendor/ledger-import/xlsx-0.20.3.min.js?v=0.20.3"></script>
     <script src="vendor/ledger-import/fflate-0.8.2.min.js?v=0.8.2"></script>
-    <script src="js/ledger-import.js?v=20260905-1"></script>
-    <script src="js/ledger.js?v=20260905-2"></script>
+    <script src="js/ledger-import.js?v=20260907-1"></script>
+    <script src="js/ledger.js?v=20260907-1"></script>
     <script src="js/recharge-codes.js?v=20260905-1"></script>
-    <script src="js/script.js?v=20260905-3"></script>
+    <script src="js/script.js?v=20260907-1"></script>
   </body>
 </html>

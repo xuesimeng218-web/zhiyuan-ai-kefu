@@ -553,7 +553,7 @@ const KEY = "zy_kb_system_v2",
       function addMailAccount(event) {
         event.preventDefault();
         const form = event.currentTarget;
-        const account = String(form?.elements?.namedItem("account")?.value || "").trim();
+        const accountInput = String(form?.elements?.namedItem("account")?.value || "").trim();
         const originalPassword = String(form?.elements?.namedItem("originalPassword")?.value || "");
         const sourceBatch = String(form?.elements?.namedItem("sourceBatch")?.value || "").trim();
         if (!account || !originalPassword || !sourceBatch) return;
@@ -600,7 +600,7 @@ const KEY = "zy_kb_system_v2",
         const record = mailAccounts.find((item) => item.id === id);
         if (!record) return;
         const delivered = isMailDelivered(record);
-        showMailEditModal(`<section class="recharge-code-modal mail-edit-modal" role="dialog" aria-modal="true" aria-labelledby="mailEditTitle"><header><div><span class="section-kicker">ACCOUNT EDITOR</span><h2 id="mailEditTitle">编辑邮箱账号</h2></div><button type="button" onclick="closeMailEditModal()" aria-label="关闭">×</button></header><form class="mail-edit-form" onsubmit="saveMailAccountEdit(event,'${esc(record.id)}')"><div class="mail-edit-grid"><label class="mail-edit-account"><span>邮箱账号</span><div class="mail-edit-field-actions"><input name="account" type="email" maxlength="200" value="${esc(record.account)}" required><button type="button" class="btn" onclick="copyMailEditField('account')">复制账号</button></div></label><label><span>来源批次</span><input name="sourceBatch" maxlength="100" value="${esc(record.sourceBatch || "")}" required></label><label><span>原密码</span><div class="mail-edit-field-actions"><input name="originalPassword" type="password" maxlength="200" value="${esc(record.originalPassword)}" required><button type="button" class="btn" onclick="toggleMailEditSecret(this,'originalPassword')">查看</button><button type="button" class="btn" onclick="copyMailEditField('originalPassword')">复制</button></div></label><label><span>新密码</span><div class="mail-edit-field-actions"><input name="newPassword" type="password" maxlength="200" value="${esc(record.newPassword || "")}"><button type="button" class="btn" onclick="toggleMailEditSecret(this,'newPassword')">查看</button><button type="button" class="btn" onclick="copyMailEditField('newPassword')">复制</button></div></label><label><span>使用客户</span><input name="customer" maxlength="100" value="${esc(record.customer || "")}"></label><label><span>交付日期</span><input name="deliveryDate" type="date" value="${esc(record.deliveryDate || "")}"></label><label><span>交付状态</span><select name="deliveryStatus"><option value="pending"${delivered ? "" : " selected"}>未交付</option><option value="delivered"${delivered ? " selected" : ""}>交付</option></select></label></div><p class="mail-edit-hint">选择“交付”时，使用客户、新密码和交付日期必须填写完整。</p><p class="mail-edit-error" role="alert"></p><footer><button type="button" class="btn" onclick="closeMailEditModal()">取消</button><button type="submit" class="btn primary">保存修改</button></footer></form></section>`);
+        showMailEditModal(`<section class="recharge-code-modal mail-edit-modal" role="dialog" aria-modal="true" aria-labelledby="mailEditTitle"><header><div><span class="section-kicker">ACCOUNT EDITOR</span><h2 id="mailEditTitle">编辑邮箱账号</h2></div><button type="button" onclick="closeMailEditModal()" aria-label="关闭">×</button></header><form class="mail-edit-form" onsubmit="saveMailAccountEdit(event,'${esc(record.id)}')"><div class="mail-edit-grid"><label class="mail-edit-account"><span>邮箱账号</span><div class="mail-edit-field-actions"><input name="account" type="email" maxlength="200" value="${esc(record.account)}"><button type="button" class="btn" onclick="copyMailEditField('account')">复制账号</button></div></label><label><span>来源批次</span><input name="sourceBatch" maxlength="100" value="${esc(record.sourceBatch || "")}"></label><label><span>原密码</span><div class="mail-edit-field-actions"><input name="originalPassword" type="password" maxlength="200" value="${esc(record.originalPassword)}"><button type="button" class="btn" onclick="toggleMailEditSecret(this,'originalPassword')">查看</button><button type="button" class="btn" onclick="copyMailEditField('originalPassword')">复制</button></div></label><label><span>新密码</span><div class="mail-edit-field-actions"><input name="newPassword" type="password" maxlength="200" value="${esc(record.newPassword || "")}"><button type="button" class="btn" onclick="toggleMailEditSecret(this,'newPassword')">查看</button><button type="button" class="btn" onclick="copyMailEditField('newPassword')">复制</button></div></label><label><span>使用客户</span><input name="customer" maxlength="100" value="${esc(record.customer || "")}"></label><label><span>交付日期</span><input name="deliveryDate" type="date" value="${esc(record.deliveryDate || "")}"></label><label><span>交付状态</span><select name="deliveryStatus"><option value="pending"${delivered ? "" : " selected"}>未交付</option><option value="delivered"${delivered ? " selected" : ""}>交付</option></select></label></div><p class="mail-edit-hint">所有字段均可后续补充；新密码为空表示使用原密码交付，邮箱账号留空时保留原账号。</p><p class="mail-edit-error" role="alert"></p><footer><button type="button" class="btn" onclick="closeMailEditModal()">取消</button><button type="submit" class="btn primary">保存修改</button></footer></form></section>`);
       }
       function toggleMailEditSecret(button, field) {
         const input = document.querySelector(`#mailEditModal [name="${field}"]`);
@@ -617,7 +617,7 @@ const KEY = "zy_kb_system_v2",
       function saveMailAccountEdit(event, id) {
         event.preventDefault();
         const form = event.currentTarget;
-        const account = String(form?.elements?.namedItem("account")?.value || "").trim();
+        const accountInput = String(form?.elements?.namedItem("account")?.value || "").trim();
         const originalPassword = String(form?.elements?.namedItem("originalPassword")?.value || "");
         const sourceBatch = String(form?.elements?.namedItem("sourceBatch")?.value || "").trim();
         const customer = String(form?.elements?.namedItem("customer")?.value || "").trim();
@@ -626,16 +626,13 @@ const KEY = "zy_kb_system_v2",
         const deliveryStatus = String(form?.elements?.namedItem("deliveryStatus")?.value || "");
         const error = form?.querySelector(".mail-edit-error");
         const showError = (message) => { if (error) error.textContent = message; };
-        if (!isValidMailAddress(account)) return showError("请填写有效的邮箱账号。");
-        if (!isValidMailPassword(originalPassword)) return showError("原密码不能为空、不能超过 200 字符或包含控制字符。");
-        if (!sourceBatch || sourceBatch.length > 100 || /[\u0000-\u001F\u007F]/.test(sourceBatch)) return showError("请填写有效的来源批次。");
+        if (accountInput && !isValidMailAddress(accountInput)) return showError("邮箱账号格式无效。");
+        if (originalPassword && !isValidMailPassword(originalPassword)) return showError("原密码不能超过 200 字符或包含控制字符。");
+        if (sourceBatch && (sourceBatch.length > 100 || /[\u0000-\u001F\u007F]/.test(sourceBatch))) return showError("来源批次内容无效或过长。");
         if (customer.length > 100 || /[\u0000-\u001F\u007F]/.test(customer)) return showError("使用客户内容无效或过长。");
         if (newPassword && !isValidMailPassword(newPassword)) return showError("新密码不能超过 200 字符或包含控制字符。");
         if (deliveryDate && !/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return showError("请填写有效的交付日期。");
         if (!new Set(["pending", "delivered"]).has(deliveryStatus)) return showError("请选择有效的交付状态。");
-        if (deliveryStatus === "delivered" && (!customer || !newPassword || !deliveryDate)) {
-          return showError("保存为交付状态前，请完整填写使用客户、新密码和交付日期。");
-        }
         let fresh;
         try {
           fresh = readMailAccountsFreshStrict();
@@ -644,9 +641,18 @@ const KEY = "zy_kb_system_v2",
         }
         const existing = fresh.find((record) => record.id === id);
         if (!existing) return showError("该邮箱记录已变化或不存在，请关闭后刷新重试。");
-        if (fresh.some((record) => record.id !== id && record.account.trim().toLocaleLowerCase() === account.toLocaleLowerCase())) {
+        const account = accountInput || existing.account;
+        if (account && fresh.some((record) => record.id !== id && record.account.trim().toLocaleLowerCase() === account.toLocaleLowerCase())) {
           return showError("该邮箱账号已存在。");
         }
+        const unchanged = account === existing.account &&
+          originalPassword === existing.originalPassword &&
+          sourceBatch === (existing.sourceBatch || "") &&
+          customer === (existing.customer || "") &&
+          newPassword === (existing.newPassword || "") &&
+          deliveryDate === (existing.deliveryDate || "") &&
+          (deliveryStatus === "delivered") === isMailDelivered(existing);
+        if (unchanged) return showError("尚未修改任何字段。");
         const nextRecords = fresh.map((record) =>
           record.id === id
             ? {
@@ -705,7 +711,7 @@ const KEY = "zy_kb_system_v2",
         return records
           .map((record) => {
             const delivered = isMailDelivered(record);
-            return `<article class="mail-record mail-record-compact"><div class="mail-record-main-row"><div class="mail-record-cell mail-account-cell" data-label="邮箱"><strong title="${esc(record.account)}">${esc(record.account)}</strong></div><div class="mail-record-cell mail-password-cell" data-label="原密码"><code>${esc(maskMailPassword(record.originalPassword))}</code></div><div class="mail-record-cell mail-password-cell" data-label="新密码"><code>${record.newPassword ? esc(maskMailPassword(record.newPassword)) : "待补录"}</code></div><div class="mail-record-cell" data-label="使用客户"><span>${esc(record.customer || "待补录")}</span></div><div class="mail-record-cell" data-label="交付日期"><span>${esc(record.deliveryDate || "待补录")}</span></div><div class="mail-record-cell mail-status-cell" data-label="状态"><span class="manager-status ${delivered ? "is-delivered" : "is-pending"}">${delivered ? "交付" : "未交付"}</span></div><div class="mail-record-cell mail-operation-cell" data-label="编辑"><button type="button" class="btn" onclick="openMailEditModal('${esc(record.id)}')">编辑</button></div></div></article>`;
+            return `<article class="mail-record mail-record-compact"><div class="mail-record-main-row"><div class="mail-record-cell mail-account-cell" data-label="邮箱"><strong title="${esc(record.account)}">${esc(record.account || "未填写")}</strong></div><div class="mail-record-cell mail-password-cell" data-label="原密码"><code>${record.originalPassword ? esc(maskMailPassword(record.originalPassword)) : "—"}</code></div><div class="mail-record-cell mail-password-cell" data-label="新密码"><code>${record.newPassword ? esc(maskMailPassword(record.newPassword)) : "未修改"}</code></div><div class="mail-record-cell" data-label="使用客户"><span>${esc(record.customer || "待补录")}</span></div><div class="mail-record-cell" data-label="交付日期"><span>${esc(record.deliveryDate || "待补录")}</span></div><div class="mail-record-cell mail-status-cell" data-label="状态"><span class="manager-status ${delivered ? "is-delivered" : "is-pending"}">${delivered ? "交付" : "未交付"}</span></div><div class="mail-record-cell mail-operation-cell" data-label="编辑"><button type="button" class="btn" onclick="openMailEditModal('${esc(record.id)}')">编辑</button></div></div></article>`;
           })
           .join("");
       }

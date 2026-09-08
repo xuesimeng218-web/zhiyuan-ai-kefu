@@ -33,7 +33,7 @@
   let state = freshState();
 
   function freshState() {
-    return { platform: "auto", file: null, rows: null, headers: [], mapping: {}, headerIndex: -1, candidates: [], analysis: null, page: 1, batchId: "", selectedSource: "", choices: null, wecomPreset: false, manualMapping: false, usedWecomPreset: false };
+    return { platform: "auto", file: null, rows: null, headers: [], mapping: {}, headerIndex: -1, candidates: [], analysis: null, page: 1, batchId: "", selectedSource: "", choices: null, wecomPreset: false, manualMapping: false, usedWecomPreset: false, previewFilter: "all", bulkScope: "page", bulkTarget: "" };
   }
 
   function esc(value) {
@@ -54,7 +54,7 @@
     state = freshState();
     const backdrop = document.createElement("div");
     backdrop.className = "ledger-import-modal-backdrop";
-    backdrop.innerHTML = `<section class="ledger-import-modal" role="dialog" aria-modal="true" aria-labelledby="ledgerImportTitle"><header class="ledger-import-header"><div><span class="section-kicker">STATEMENT IMPORT</span><h2 id="ledgerImportTitle">导入支付宝/企业微信流水</h2></div><button type="button" class="ledger-import-close" data-ledger-import-action="close" aria-label="关闭">×</button></header><div class="ledger-import-steps" aria-label="导入步骤"><span class="active">1 选择文件</span><span>2 自动识别/字段对应</span><span>3 预览确认</span></div><div class="ledger-import-content"></div></section>`;
+    backdrop.innerHTML = `<section class="ledger-import-modal" role="dialog" aria-modal="true" aria-labelledby="ledgerImportTitle"><header class="ledger-import-header"><div><span class="section-kicker">STATEMENT IMPORT</span><h2 id="ledgerImportTitle">导入支付宝/企业微信流水</h2></div><button type="button" class="ledger-import-close" data-ledger-import-action="close" aria-label="关闭">×</button></header><div class="ledger-import-steps" aria-label="导入步骤"><span class="active">1 上传文件</span><span>2 识别平台</span><span>3 自动分类 / 字段对应</span><span>4 预览确认</span><span>5 完成导入</span></div><div class="ledger-import-content"></div></section>`;
     document.body.appendChild(backdrop);
     renderChoose();
   }
@@ -235,6 +235,7 @@
   }
 
   function renderChoice(type, choices) {
+    setStep(2);
     const root = contentRoot();
     if (!root) return;
     root.innerHTML = `<div class="ledger-import-choice"><h3>${type === "zip" ? "选择压缩包内文件" : "选择工作表"}</h3><p>检测到多个候选，请选择本次要解析的一项。</p><label><span>${type === "zip" ? "文件" : "工作表"}</span><select data-ledger-import-choice>${choices.map((choice, index) => `<option value="${index}">${esc(choice)}</option>`).join("")}</select></label><footer><button class="btn" type="button" data-ledger-import-action="back">返回</button><button class="btn primary" type="button" data-ledger-import-action="use-choice" data-choice-type="${type}">继续</button></footer></div>`;
@@ -357,7 +358,7 @@
   }
 
   function renderMapping(message = "") {
-    setStep(2);
+    setStep(3);
     const root = contentRoot();
     if (!root) return;
     if (state.wecomPreset && !state.manualMapping) {
@@ -494,8 +495,28 @@
     return `<select data-candidate-target>${options.map(([value, label]) => `<option value="${value}"${candidate.target === value ? " selected" : ""}>${label}</option>`).join("")}</select>${candidateControls(candidate)}`;
   }
 
+  function filteredPreviewCandidates(statusById) {
+    return state.candidates.filter((candidate) => {
+      const status = statusById.get(candidate.clientId)?.status || "";
+      if (state.previewFilter === "income") return candidate.target === "income";
+      if (state.previewFilter === "expense") return ["third_party", "other"].includes(candidate.target);
+      if (state.previewFilter === "ignored") return candidate.target === "ignore" || status === "ignored";
+      if (state.previewFilter === "issues") return ["duplicate", "conflict", "invalid", "needsSupplement"].includes(status);
+      if (state.previewFilter === "importable") return ["addition", "possibleDuplicate"].includes(status);
+      return true;
+    });
+  }
+
+  function candidatesInBulkScope(statusById) {
+    const filtered = filteredPreviewCandidates(statusById);
+    if (state.bulkScope === "all") return state.candidates;
+    if (state.bulkScope === "filtered") return filtered;
+    const start = (state.page - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }
+
   function renderPreview() {
-    setStep(3);
+    setStep(4);
     const root = contentRoot();
     if (!root) return;
     if (!state.analysis?.ok) {
@@ -513,10 +534,14 @@
     }, {});
     const supplementCount = Number(counts.needsSupplement || 0) + Number(counts.invalid || 0);
     const statusById = new Map(state.analysis.rows.map((row) => [row.clientId, row]));
-    const start = (state.page - 1) * PAGE_SIZE, pageRows = state.candidates.slice(start, start + PAGE_SIZE);
-    const totalPages = Math.max(1, Math.ceil(state.candidates.length / PAGE_SIZE));
+    const filtered = filteredPreviewCandidates(statusById);
+    const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    state.page = Math.min(state.page, totalPages);
+    const start = (state.page - 1) * PAGE_SIZE, pageRows = filtered.slice(start, start + PAGE_SIZE);
+    const affectedCount = candidatesInBulkScope(statusById).length;
+    const expenseCount = Number(targetCounts.third_party || 0) + Number(targetCounts.other || 0);
     const breakdown = state.usedWecomPreset ? `<div class="ledger-import-preview-rules"><span>客户付款 <b>${ruleCounts.income || 0}</b></span><span>交易手续费 <b>${ruleCounts.fee || 0}</b></span><span>客户退款 <b>${ruleCounts.refund || 0}</b></span><span>提现忽略 <b>${ruleCounts.withdrawal || 0}</b></span></div>` : "";
-    root.innerHTML = `<div class="ledger-import-preview-panel"><div class="ledger-import-preview-head"><div><h3>逐行预览与分类</h3><p>原始数据 ${state.candidates.length} 行；确认时会重新读取记账台并再次去重。</p></div><label><span>批量设置当前全部记录</span><select data-ledger-import-bulk><option value="">请选择操作</option><option value="income">收入</option><option value="third_party">第三方代充</option><option value="other">其他支出</option><option value="ignore">忽略</option></select></label></div>${breakdown}<div class="ledger-import-stats">${[["原始总行数", state.candidates.length], ["收入", targetCounts.income || 0], ["其他支出", targetCounts.other || 0], ["忽略", targetCounts.ignore || 0], ["需补充", supplementCount], ["可导入", counts.addition || 0], ["重复", counts.duplicate || 0], ["冲突", counts.conflict || 0]].map(([label, value]) => `<span><strong>${value}</strong>${label}</span>`).join("")}</div><div class="ledger-import-table-wrap"><table class="ledger-import-table"><thead><tr><th>行</th><th>日期时间</th><th>方向/金额</th><th>交易对象与说明</th><th>自动分类/来源标识</th><th>导入目标与补充</th><th>处理结果</th></tr></thead><tbody>${pageRows.map((candidate) => { const result = statusById.get(candidate.clientId) || {}; return `<tr data-candidate-id="${esc(candidate.clientId)}"><td data-label="行">${candidate.rowNumber}</td><td data-label="日期时间">${esc(candidate.date || "—")}<small>${esc(candidate.time || "")}</small></td><td data-label="方向/金额">${esc(candidate.direction || "未识别")}<strong>¥${(candidate.amountCents / 100).toFixed(2)}</strong></td><td data-label="交易对象与说明"><b>${esc(candidate.counterparty || "—")}</b><small>${esc(candidate.summary || "—")}</small></td><td data-label="自动分类/来源标识">${esc(candidate.statusText || "—")}<small>${candidate.sourceTransactionId ? "已建立脱敏稳定标识" : "使用来源指纹"}</small></td><td data-label="导入目标">${targetSelect(candidate)}</td><td data-label="处理结果"><span class="ledger-import-result ${esc(result.status)}">${esc(statusLabel(result.status))}</span><small>${esc(result.reason || "")}</small></td></tr>`; }).join("")}</tbody></table></div><div class="ledger-import-pagination"><button class="btn" type="button" data-ledger-import-action="page-prev"${state.page <= 1 ? " disabled" : ""}>上一页</button><span>第 ${state.page} / ${totalPages} 页</span><button class="btn" type="button" data-ledger-import-action="page-next"${state.page >= totalPages ? " disabled" : ""}>下一页</button></div><p class="ledger-import-hint">“可能重复”仅提示，不会覆盖或删除手工记录；确认后仍会按当前预览追加。冲突、无效、需要补充、重复和忽略项不会写入。</p><footer><button class="btn" type="button" data-ledger-import-action="mapping">返回字段对应</button><button class="btn primary" type="button" data-ledger-import-action="confirm"${(counts.addition || 0) + (counts.possibleDuplicate || 0) ? "" : " disabled"}>确认安全追加 ${Number(counts.addition || 0) + Number(counts.possibleDuplicate || 0)} 笔</button></footer></div>`;
+    root.innerHTML = `<div class="ledger-import-preview-panel"><div class="ledger-import-preview-head"><div><h3>逐行预览与分类</h3><p>原始数据 ${state.candidates.length} 行；确认时会重新读取记账台并再次去重。</p></div><label><span>预览筛选</span><select data-ledger-import-preview-filter><option value="all"${state.previewFilter === "all" ? " selected" : ""}>全部记录</option><option value="importable"${state.previewFilter === "importable" ? " selected" : ""}>可导入</option><option value="income"${state.previewFilter === "income" ? " selected" : ""}>收入</option><option value="expense"${state.previewFilter === "expense" ? " selected" : ""}>支出</option><option value="ignored"${state.previewFilter === "ignored" ? " selected" : ""}>忽略</option><option value="issues"${state.previewFilter === "issues" ? " selected" : ""}>重复 / 冲突 / 需补充</option></select></label></div>${breakdown}<section class="ledger-import-bulk-panel" aria-label="批量设置"><div><label><span>操作范围</span><select data-ledger-import-bulk-scope><option value="page"${state.bulkScope === "page" ? " selected" : ""}>当前页</option><option value="filtered"${state.bulkScope === "filtered" ? " selected" : ""}>当前筛选结果</option><option value="all"${state.bulkScope === "all" ? " selected" : ""}>全部记录</option></select></label><label><span>处理方式</span><select data-ledger-import-bulk-target><option value=""${state.bulkTarget ? "" : " selected"}>请选择处理方式</option><option value="income"${state.bulkTarget === "income" ? " selected" : ""}>收入</option><option value="third_party"${state.bulkTarget === "third_party" ? " selected" : ""}>第三方代充</option><option value="other"${state.bulkTarget === "other" ? " selected" : ""}>其他支出</option><option value="ignore"${state.bulkTarget === "ignore" ? " selected" : ""}>忽略</option></select></label><button class="btn primary" type="button" data-ledger-import-action="apply-bulk"${TARGETS.has(state.bulkTarget) && affectedCount ? "" : " disabled"}>应用到选定范围</button></div><p>本次操作将影响 <strong>${affectedCount}</strong> 条记录；“全部记录”表示本次文件内的全部待处理行。</p></section><div class="ledger-import-stats">${[["原始总行数", state.candidates.length], ["收入", targetCounts.income || 0], ["支出", expenseCount], ["忽略", targetCounts.ignore || 0], ["需补充", supplementCount], ["可导入", counts.addition || 0], ["重复", counts.duplicate || 0], ["冲突", counts.conflict || 0]].map(([label, value]) => `<span><strong>${value}</strong>${label}</span>`).join("")}</div><p class="ledger-import-filter-count">当前筛选显示 ${filtered.length} 条</p><div class="ledger-import-table-wrap"><table class="ledger-import-table"><thead><tr><th>行</th><th>日期时间</th><th>方向/金额</th><th>交易对象与说明</th><th>自动分类/来源标识</th><th>导入目标与补充</th><th>处理结果</th></tr></thead><tbody>${pageRows.length ? pageRows.map((candidate) => { const result = statusById.get(candidate.clientId) || {}; return `<tr data-candidate-id="${esc(candidate.clientId)}"><td data-label="行">${candidate.rowNumber}</td><td data-label="日期时间">${esc(candidate.date || "—")}<small>${esc(candidate.time || "")}</small></td><td data-label="方向/金额">${esc(candidate.direction || "未识别")}<strong>¥${(candidate.amountCents / 100).toFixed(2)}</strong></td><td data-label="交易对象与说明"><b>${esc(candidate.counterparty || "—")}</b><small>${esc(candidate.summary || "—")}</small></td><td data-label="自动分类/来源标识">${esc(candidate.statusText || "—")}<small>${candidate.sourceTransactionId ? "已建立脱敏稳定标识" : "使用来源指纹"}</small></td><td data-label="导入目标">${targetSelect(candidate)}</td><td data-label="处理结果"><span class="ledger-import-result ${esc(result.status)}">${esc(statusLabel(result.status))}</span><small>${esc(result.reason || "")}</small></td></tr>`; }).join("") : '<tr><td colspan="7"><div class="ledger-import-empty">当前预览筛选下没有记录，请切换筛选条件。</div></td></tr>'}</tbody></table></div><div class="ledger-import-pagination"><button class="btn" type="button" data-ledger-import-action="page-prev"${state.page <= 1 ? " disabled" : ""}>上一页</button><span>第 ${state.page} / ${totalPages} 页</span><button class="btn" type="button" data-ledger-import-action="page-next"${state.page >= totalPages ? " disabled" : ""}>下一页</button></div><p class="ledger-import-hint">“可能重复”仅提示，不会覆盖或删除手工记录；确认后仍会按当前预览追加。冲突、无效、需要补充、重复和忽略项不会写入。</p><footer><button class="btn" type="button" data-ledger-import-action="mapping">返回字段对应</button><button class="btn primary" type="button" data-ledger-import-action="confirm"${(counts.addition || 0) + (counts.possibleDuplicate || 0) ? "" : " disabled"}>确认安全追加 ${Number(counts.addition || 0) + Number(counts.possibleDuplicate || 0)} 笔</button></footer></div>`;
   }
 
   function updateCandidate(element) {
@@ -531,6 +556,25 @@
     refreshAnalysis();
   }
 
+  function applyBulkSetting() {
+    if (!state.analysis?.ok || !TARGETS.has(state.bulkTarget)) return;
+    const statusById = new Map(state.analysis.rows.map((row) => [row.clientId, row]));
+    const affected = candidatesInBulkScope(statusById);
+    for (const candidate of affected) {
+      candidate.target = state.bulkTarget;
+      candidate.ignoreReason = state.bulkTarget === "ignore" ? "用户批量选择忽略" : "";
+    }
+    refreshAnalysis();
+  }
+
+  function renderComplete(result) {
+    setStep(5);
+    const root = contentRoot();
+    if (!root) return;
+    const counts = result?.counts || {};
+    root.innerHTML = `<section class="ledger-import-complete" role="status"><span class="ledger-import-complete-icon">✓</span><div><span class="section-kicker">IMPORT COMPLETE</span><h3>流水导入已完成</h3><p>新增记录已写入记账台；重复、冲突、无效和忽略项均未写入。</p></div><div class="ledger-import-stats"><span><strong>${Number(result?.imported || 0)}</strong>新增</span><span><strong>${Number(counts.duplicate || 0)}</strong>重复</span><span><strong>${Number(counts.conflict || 0)}</strong>冲突</span><span><strong>${Number(counts.ignored || 0)}</strong>忽略</span></div><footer><button class="btn primary" type="button" data-ledger-import-action="close">完成并查看流水列表</button></footer></section>`;
+  }
+
   async function confirmMerge() {
     if (!state.analysis?.ok || !confirm("确认将预览中的合法记录安全追加到记账台吗？现有数据不会被覆盖或清空。")) return;
     const result = ledgerApi()?.mergeExternalEntries?.(state.candidates, state.analysis.signature);
@@ -540,9 +584,7 @@
       else alert(result?.error || "导入失败，未写入任何记录。");
       return;
     }
-    const imported = result.imported || 0;
-    close();
-    alert(`流水安全导入完成：新增 ${imported} 笔记录。`);
+    renderComplete(result);
   }
 
   function handleClick(event) {
@@ -559,6 +601,7 @@
     else if (action === "mapping") renderMapping();
     else if (action === "page-prev") { state.page -= 1; renderPreview(); }
     else if (action === "page-next") { state.page += 1; renderPreview(); }
+    else if (action === "apply-bulk") applyBulkSetting();
     else if (action === "confirm") confirmMerge();
   }
 
@@ -575,10 +618,16 @@
     } else if (event.target.matches("[data-ledger-import-mapping-platform], [data-ledger-import-map]")) {
       state.manualMapping = true;
       if (event.target.matches("[data-ledger-import-mapping-platform]")) state.platform = event.target.value;
-    } else if (event.target.matches("[data-ledger-import-bulk]")) {
-      if (!TARGETS.has(event.target.value)) return;
-      state.candidates.forEach((candidate) => { candidate.target = event.target.value; candidate.ignoreReason = event.target.value === "ignore" ? "用户批量选择忽略" : ""; });
-      refreshAnalysis();
+    } else if (event.target.matches("[data-ledger-import-preview-filter]")) {
+      state.previewFilter = event.target.value;
+      state.page = 1;
+      renderPreview();
+    } else if (event.target.matches("[data-ledger-import-bulk-scope]")) {
+      state.bulkScope = event.target.value;
+      renderPreview();
+    } else if (event.target.matches("[data-ledger-import-bulk-target]")) {
+      state.bulkTarget = event.target.value;
+      renderPreview();
     } else if (event.target.matches("[data-candidate-target], [data-candidate-field]")) updateCandidate(event.target);
   }
 
