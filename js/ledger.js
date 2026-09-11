@@ -3,6 +3,8 @@
 
   const ENTRIES_KEY = "zy_kb_ledger_entries_v1";
   const PARTNERS_KEY = "zy_kb_ledger_partners_v1";
+  const CATEGORIES_KEY = "zy_kb_ledger_categories_v1";
+  const MANUAL_PARTNER_PREFIX = "manual-group:";
   const STATE_KEY = "zy_kb_ledger_state_v1";
   const CUSTOMER_CODES_KEY = "zy_kb_customer_codes_v1";
   const BACKUP_TYPE = "zy-kb-ledger-backup";
@@ -42,6 +44,7 @@
       keyword: "",
     },
     income: {
+      category: "all",
       source: "all",
       monthScope: "current",
       dateFrom: "",
@@ -56,6 +59,7 @@
   let initialized = false;
   let entries = [];
   let partners = [];
+  let categories = [];
   let state = createDefaultState();
   let storageMessage = "";
   let importPreview = null;
@@ -169,6 +173,99 @@
     }
   }
 
+  function defaultCategories(type) {
+    return type === "income" ? ["客户付款"] : [...EXPENSE_CATEGORIES];
+  }
+
+  function normalizeCategory(raw) {
+    if (!raw || !["income", "expense"].includes(raw.type) || typeof raw.name !== "string" ||
+        !raw.name.trim() || raw.name.trim().length > 40 || typeof raw.active !== "boolean") return null;
+    const base = normalizePartner(raw);
+    if (!base || defaultCategories(raw.type).includes(base.name)) return null;
+    return { ...base, type: raw.type, active: raw.active };
+  }
+
+  function categoryOptions(type, historical = "", filter = false) {
+    const names = new Set(defaultCategories(type));
+    categories.filter((item) => item.type === type && (filter || item.active)).forEach((item) => names.add(item.name));
+    if (filter) entries.filter((entry) => entry.type === type).forEach((entry) => names.add(entryCategoryName(entry)));
+    if (historical) names.add(historical);
+    return [...names].map((name) => [name, name]);
+  }
+
+  function saveCategories(next) {
+    if (!canWrite() || !writeJson(CATEGORIES_KEY, { version: SCHEMA_VERSION, categories: next })) return false;
+    categories = next;
+    return true;
+  }
+
+  function openCategories(id = "") {
+    const editing = categories.find((item) => item.id === id);
+    const sections = ["income", "expense"].map((type) => `<h3>${type === "income" ? "收入分类" : "支出分类"}</h3><p>系统分类：${defaultCategories(type).map(esc).join("、")}</p><ul class="ledger-partner-list">${categories.filter((item) => item.type === type).map((item) => `<li><span><strong>${esc(item.name)}</strong><small>${item.active ? "使用中" : "已停用"}</small></span><div><button type="button" class="btn" data-ledger-action="edit-category" data-category-id="${esc(item.id)}">编辑</button><button type="button" class="btn" data-ledger-action="toggle-category" data-category-id="${esc(item.id)}">${item.active ? "停用" : "启用"}</button><button type="button" class="btn danger" data-ledger-action="delete-category" data-category-id="${esc(item.id)}">删除</button></div></li>`).join("") || '<li>暂无自定义分类</li>'}</ul>`).join("");
+    modal(`<section class="ledger-modal ledger-category-modal" role="dialog" aria-modal="true" aria-labelledby="ledgerCategoryTitle"><header><h2 id="ledgerCategoryTitle">分类管理</h2><button type="button" class="ledger-modal-close" data-ledger-action="close-modal" aria-label="关闭">×</button></header><p>分类名称为 1–40 个字符。已关联此分类的记录随名称更新；仅保存分类文字的历史记录保持原样。已使用分类只能停用，系统分类不可删除。</p><form data-ledger-form="category" data-category-id="${esc(id)}"><div class="ledger-form-grid">${field("分类名称", "name", editing?.name || "", { required: true, max: 40 })}${field("分类类型", "type", editing?.type || "expense", { select: editing ? [[editing.type, editing.type === "income" ? "收入" : "支出"]] : [["income", "收入"], ["expense", "支出"]] })}</div><p class="ledger-form-error" role="alert"></p><footer><button type="button" class="btn" data-ledger-action="${editing ? "categories" : "close-modal"}">取消</button><button type="submit" class="btn primary">${editing ? "保存修改" : "新增分类"}</button></footer></form>${sections}</section>`);
+  }
+
+  function saveCategoryForm(form) {
+    const data = new FormData(form);
+    const name = String(data.get("name") || "").trim();
+    const id = form.dataset.categoryId;
+    const type = categories.find((item) => item.id === id)?.type || data.get("type");
+    if (!name || name.length > 40 || !["income", "expense"].includes(type)) return formError(form, "请填写 1–40 个字符的分类名称及有效类型。");
+    const same = (value) => value.toLocaleLowerCase() === name.toLocaleLowerCase();
+    if (defaultCategories(type).some(same) || categories.some((item) => item.id !== id && item.type === type && same(item.name))) return formError(form, "该分类名称已存在（包括已停用分类）。");
+    const existing = categories.find((item) => item.id === id);
+    const next = { id: existing?.id || createId("category"), name, type, active: existing?.active ?? true, createdAt: existing?.createdAt || nowIso(), updatedAt: nowIso() };
+    if (!saveCategories(existing ? categories.map((item) => item.id === id ? next : item) : [...categories, next])) return;
+    render();
+    openCategories();
+    notify(existing ? "分类已更新，历史记录数据保持不变" : "分类已新增，可在对应记账表单选择");
+  }
+
+  function entryCategoryName(entry) {
+    return categories.find((item) => item.id === entry?.categoryId && item.type === entry.type)?.name || entry?.category || "";
+  }
+
+  function partnerUsage(partner) {
+    return entries.filter((entry) => entry.type === "expense" && (
+      entry.partnerId === partner.id || entry.partnerId === MANUAL_PARTNER_PREFIX + partner.name ||
+      entry.partnerDisplayName === partner.name || (!entry.partnerId && entry.payee === partner.name)
+    )).length;
+  }
+
+  function deleteManaged(kind, id) {
+    const isCategory = kind === "category";
+    const list = isCategory ? categories : partners;
+    const item = list.find((item) => item.id === id);
+    if (!item) return;
+    const count = isCategory ? entries.filter((entry) => entry.type === item.type &&
+      (entry.categoryId === id || (!entry.categoryId && entry.category === item.name))).length : partnerUsage(item);
+    const label = isCategory ? "分类" : "第三方群";
+    let next;
+    if (count) {
+      const message = `该${label}已有 ${count} 条${isCategory ? "" : "支出"}记录使用，不能直接删除。可先停用，历史记录仍会保留。`;
+      if (!item.active) { notify(message + "当前已停用。"); return; }
+      if (!confirm(message + "\n是否停用？取消将保持不变。")) return;
+      next = list.map((row) => row.id === id ? { ...row, active: false, updatedAt: nowIso() } : row);
+    } else {
+      if (!confirm(`确定删除${label}“${item.name}”吗？此操作无法撤销。`)) return;
+      next = list.filter((row) => row.id !== id);
+    }
+    if (!(isCategory ? saveCategories(next) : savePartners(next))) return;
+    render();
+    if (isCategory) openCategories(); else openPartners();
+    notify(count ? `${label}已停用，历史记录仍会保留` : `${label}已删除`);
+  }
+
+  function syncPartnerFields() {
+    const form = $("[data-ledger-form='entry'][data-entry-type='expense']");
+    if (!form) return;
+    const show = form.elements.category.value === "第三方代充";
+    form.elements.partnerId.closest("label").hidden = !show;
+    form.elements.partnerId.disabled = !show;
+    form.elements.partnerId.required = show;
+    form.elements.payee.closest("label").hidden = show;
+  }
+
   function normalizePartner(raw) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const id = safeText(raw.id, 160);
@@ -176,7 +273,7 @@
     const createdAt = safeText(raw.createdAt, 60);
     const updatedAt = safeText(raw.updatedAt || raw.createdAt, 60);
     if (!id || !name || !createdAt || Number.isNaN(Date.parse(createdAt)) || Number.isNaN(Date.parse(updatedAt))) return null;
-    return { id, name, createdAt, updatedAt };
+    return { id, name, active: raw.active !== false, createdAt, updatedAt };
   }
 
   function normalizeEntry(raw) {
@@ -201,8 +298,8 @@
       Number.isNaN(Date.parse(createdAt)) ||
       Number.isNaN(Date.parse(updatedAt))
     ) return null;
-    if (type === "expense" && !EXPENSE_CATEGORIES.has(category)) return null;
-    if (type === "income" && category !== "客户付款") return null;
+    // Category names are snapshots: renamed/disabled categories remain valid in history.
+    if (!category || typeof raw.category !== "string" || raw.category.trim().length > 40) return null;
     const customerCode = safeText(raw.customerCode, 20);
     if (customerCode && !CUSTOMER_CODE_PATTERN.test(customerCode)) return null;
     const invoiceEligibility = type === "expense" ? safeText(raw.invoiceEligibility, 30) : "";
@@ -216,6 +313,7 @@
       id,
       type,
       category,
+      ...(safeText(raw.categoryId, 160) ? { categoryId: safeText(raw.categoryId, 160) } : {}),
       amountCents,
       date,
       time,
@@ -232,6 +330,11 @@
       createdAt,
       updatedAt,
     };
+    // An explicit empty name must stay empty; absence retains legacy display fallback.
+    if (Object.prototype.hasOwnProperty.call(raw, "partnerDisplayName")) {
+      if (typeof raw.partnerDisplayName !== "string" || raw.partnerDisplayName.trim().length > 160) return null;
+      normalized.partnerDisplayName = safeText(raw.partnerDisplayName, 160);
+    }
     const hasEntrySource = Object.prototype.hasOwnProperty.call(raw, "source");
     const source = safeText(raw.source, 30);
     if (hasEntrySource && !ENTRY_SOURCES.has(source)) return null;
@@ -275,6 +378,7 @@
       return [];
     }
     if (result.missing) {
+      if (key === CATEGORIES_KEY) return [];
       writeJson(key, { version: SCHEMA_VERSION, [field]: [] }, true);
       return [];
     }
@@ -328,6 +432,7 @@
     storageMessage = "";
     entries = loadCollection(ENTRIES_KEY, "entries", normalizeEntry);
     partners = loadCollection(PARTNERS_KEY, "partners", normalizePartner);
+    categories = loadCollection(CATEGORIES_KEY, "categories", normalizeCategory);
     state = loadState();
     initialized = true;
   }
@@ -354,8 +459,32 @@
     writeJson(STATE_KEY, state, true);
   }
 
+  // Manual names live only on the entry; managed partner IDs always take precedence.
+  function isManualPartner(id) {
+    return typeof id === "string" && id.startsWith(MANUAL_PARTNER_PREFIX) && !partners.some((partner) => partner.id === id);
+  }
+
   function partnerName(id) {
-    return partners.find((partner) => partner.id === id)?.name || "";
+    return partners.find((partner) => partner.id === id)?.name || (isManualPartner(id) ? id.slice(MANUAL_PARTNER_PREFIX.length) : "");
+  }
+
+  function entryPartnerName(entry) {
+    const managed = partners.find((partner) => partner.id === entry.partnerId);
+    // Explicit historical overrides remain visible until this entry is deliberately reassigned.
+    return entry.partnerDisplayName ?? (managed?.name || partnerName(entry.partnerId) || entry.payee || "");
+  }
+
+  function entryPartnerValue(entry) {
+    if (!entry) return "";
+    if (Object.prototype.hasOwnProperty.call(entry, "partnerDisplayName")) return "historical-current";
+    return entry.partnerId || (entry.payee ? "historical-current" : "");
+  }
+
+  function partnerOptions(entry) {
+    const options = [["", "请选择第三方群或支付对象"], ...partners.filter((item) => item.active).map((item) => [item.id, item.name])];
+    const current = entryPartnerValue(entry);
+    if (current && !options.some(([id]) => id === current)) options.push([current, `${entryPartnerName(entry) || entry.partnerId || "未填写"}（历史值）`]);
+    return options;
   }
 
   function invoiceEligibilityLabel(value) {
@@ -482,18 +611,24 @@
   }
 
   function categoryChart(expenses) {
-    const thirdParty = sumCents(expenses.filter((entry) => entry.category === "第三方代充"));
-    const other = sumCents(expenses.filter((entry) => entry.category === "其他支出"));
-    const total = thirdParty + other;
-    const percentage = total ? Math.round((thirdParty / total) * 1000) / 10 : 0;
-    const emptyClass = total ? "" : " is-empty";
-    const centerLabel = total ? "第三方代充" : "暂无支出";
-    return `<section class="ledger-card ledger-category-card"><header><span class="section-kicker">EXPENSE SHARE</span><h2>支出分类占比</h2></header><div class="ledger-donut-wrap"><div class="ledger-donut${emptyClass}" style="--ledger-share:${percentage}%"><span><strong>${percentage}%</strong><small>${centerLabel}</small></span></div><dl><div><dt><i class="third-party"></i>第三方代充</dt><dd>${money(thirdParty)}</dd></div><div><dt><i class="other-expense"></i>其他支出</dt><dd>${money(other)}</dd></div></dl></div></section>`;
+    const totals = new Map(defaultCategories("expense").map((name) => [name, 0]));
+    expenses.forEach((entry) => totals.set(entryCategoryName(entry), (totals.get(entryCategoryName(entry)) || 0) + entry.amountCents));
+    const total = sumCents(expenses);
+    let offset = 0;
+    const stops = [];
+    const rows = [...totals].map(([name, amount], index) => {
+      const color = ["#7b6ee1", "#f2b38e", "#719e74", "#a38bc2", "#ca7e97"][index % 5];
+      const share = total ? amount / total * 100 : 0;
+      stops.push(`${color} ${offset}% ${offset + share}%`);
+      offset += share;
+      return `<div><dt><i style="background:${color}"></i>${esc(name)}</dt><dd>${money(amount)} · ${share.toFixed(1)}%</dd></div>`;
+    }).join("");
+    return `<section class="ledger-card ledger-category-card"><header><span class="section-kicker">EXPENSE SHARE</span><h2>支出分类占比</h2></header><div class="ledger-donut-wrap"><div class="ledger-donut" style="background:${total ? `conic-gradient(${stops.join(",")})` : "#e8edf0"}"><span><strong>${expenses.length} 笔</strong><small>全部支出</small></span></div><dl>${rows}</dl></div></section>`;
   }
 
   function recentEntries(records) {
     const recent = sortEntries(records).slice(0, 6);
-    return `<section class="ledger-card ledger-recent-card"><header><span class="section-kicker">RECENT</span><h2>最近收支记录</h2></header><div class="ledger-recent-list">${recent.length ? recent.map((entry) => `<button type="button" data-ledger-action="edit-entry" data-entry-id="${esc(entry.id)}"><span class="ledger-entry-icon ${entry.type}">${entry.type === "income" ? "收" : "支"}</span><span><strong>${esc(entry.type === "income" ? (entry.customerName || entry.customerCode || "客户付款") : (partnerName(entry.partnerId) || entry.payee || entry.category))}</strong><small>${esc(entry.date)} ${esc(entry.time)} · ${esc(entrySourceLabel(entry))}</small></span><b class="${entry.type}">${entry.type === "income" ? "+" : "−"}${money(entry.amountCents)}</b></button>`).join("") : '<div class="ledger-empty compact">当前筛选下暂无收支记录</div>'}</div></section>`;
+    return `<section class="ledger-card ledger-recent-card"><header><span class="section-kicker">RECENT</span><h2>最近收支记录</h2></header><div class="ledger-recent-list">${recent.length ? recent.map((entry) => `<button type="button" data-ledger-action="edit-entry" data-entry-id="${esc(entry.id)}"><span class="ledger-entry-icon ${entry.type}">${entry.type === "income" ? "收" : "支"}</span><span><strong>${esc(entry.type === "income" ? (entry.customerName || entry.customerCode || entryCategoryName(entry)) : (entryPartnerName(entry) || entryCategoryName(entry)))}</strong><small>${esc(entry.date)} ${esc(entry.time)} · ${esc(entrySourceLabel(entry))}</small></span><b class="${entry.type}">${entry.type === "income" ? "+" : "−"}${money(entry.amountCents)}</b></button>`).join("") : '<div class="ledger-empty compact">当前筛选下暂无收支记录</div>'}</div></section>`;
   }
 
   function monthlySummary(source = "all", monthScope = "all") {
@@ -539,11 +674,11 @@
   function filteredExpenses() {
     const filters = state.filters.expenses;
     return sortEntries(monthEntries("expense", "all", filters.monthScope).filter((entry) => {
-      const partner = `${partnerName(entry.partnerId)} ${entry.payee}`.toLocaleLowerCase();
+      const partner = entryPartnerName(entry).toLocaleLowerCase();
       return matchesSource(entry, filters.source) &&
         (!filters.dateFrom || entry.date >= filters.dateFrom) &&
         (!filters.dateTo || entry.date <= filters.dateTo) &&
-        (filters.category === "all" || entry.category === filters.category) &&
+        (filters.category === "all" || entryCategoryName(entry) === filters.category) &&
         (!filters.partner || partner.includes(filters.partner.toLocaleLowerCase())) &&
         (filters.invoiceStatus === "all" || entry.invoiceStatus === filters.invoiceStatus) &&
         matchesText(entry, ["category", "payee", "customerCode", "product", "paymentMethod", "remark"], filters.keyword);
@@ -556,6 +691,7 @@
       matchesSource(entry, filters.source) &&
       (!filters.dateFrom || entry.date >= filters.dateFrom) &&
       (!filters.dateTo || entry.date <= filters.dateTo) &&
+      (filters.category === "all" || entryCategoryName(entry) === filters.category) &&
       matchesText(entry, ["customerCode", "customerName"], filters.customer) &&
       matchesText(entry, ["product"], filters.product) &&
       matchesText(entry, ["paymentMethod"], filters.paymentMethod) &&
@@ -582,19 +718,19 @@
 
   function expenseRows(records) {
     if (!records.length) return '<tr><td colspan="11"><div class="ledger-empty"><span><strong>当前筛选条件下没有支出记录</strong><br>原有数据未被删除，可以清除筛选或切换月份查看。</span></div></td></tr>';
-    return records.map((entry) => `<tr><td data-label="日期和时间"><strong>${esc(entry.date)}</strong><small>${esc(entry.time || "未填写时间")}</small></td><td data-label="来源">${sourceBadge(entry)}</td><td data-label="支出分类">${esc(entry.category)}</td><td data-label="第三方/对象">${esc(partnerName(entry.partnerId) || entry.payee || "—")}</td><td data-label="产品/业务">${esc(entry.product || "—")}</td><td data-label="客户编码">${esc(entry.customerCode || "—")}</td><td data-label="金额" class="expense">${money(entry.amountCents)}</td><td data-label="发票"><span class="ledger-invoice ${esc(entry.invoiceStatus)}">${esc(invoiceEligibilityLabel(entry.invoiceEligibility))} · ${esc(invoiceStatusLabel(entry.invoiceStatus))}</span></td><td data-label="备注">${esc(entry.remark || "—")}</td><td data-label="操作" class="ledger-row-actions" colspan="2"><button type="button" data-ledger-action="copy-entry" data-entry-id="${esc(entry.id)}">复制</button><button type="button" data-ledger-action="edit-entry" data-entry-id="${esc(entry.id)}">编辑</button><button type="button" class="danger" data-ledger-action="delete-entry" data-entry-id="${esc(entry.id)}">删除</button></td></tr>`).join("");
+    return records.map((entry) => `<tr><td data-label="日期和时间"><strong>${esc(entry.date)}</strong><small>${esc(entry.time || "未填写时间")}</small></td><td data-label="来源">${sourceBadge(entry)}</td><td data-label="支出分类">${esc(entryCategoryName(entry))}</td><td data-label="第三方群或支付对象">${esc(entryPartnerName(entry) || "—")}</td><td data-label="产品/业务">${esc(entry.product || "—")}</td><td data-label="客户编码">${esc(entry.customerCode || "—")}</td><td data-label="金额" class="expense">${money(entry.amountCents)}</td><td data-label="发票"><span class="ledger-invoice ${esc(entry.invoiceStatus)}">${esc(invoiceEligibilityLabel(entry.invoiceEligibility))} · ${esc(invoiceStatusLabel(entry.invoiceStatus))}</span></td><td data-label="备注">${esc(entry.remark || "—")}</td><td data-label="操作" class="ledger-row-actions" colspan="2"><button type="button" data-ledger-action="copy-entry" data-entry-id="${esc(entry.id)}">复制</button><button type="button" data-ledger-action="edit-entry" data-entry-id="${esc(entry.id)}">编辑</button><button type="button" class="danger" data-ledger-action="delete-entry" data-entry-id="${esc(entry.id)}">删除</button></td></tr>`).join("");
   }
 
   function incomeRows(records) {
-    if (!records.length) return '<tr><td colspan="10"><div class="ledger-empty"><span><strong>当前筛选条件下没有收入记录</strong><br>原有数据未被删除，可以清除筛选或切换月份查看。</span></div></td></tr>';
-    return records.map((entry) => `<tr><td data-label="日期和时间"><strong>${esc(entry.date)}</strong><small>${esc(entry.time || "未填写时间")}</small></td><td data-label="来源">${sourceBadge(entry)}</td><td data-label="客户编码">${esc(entry.customerCode || "—")}</td><td data-label="客户名称">${esc(entry.customerName || "—")}</td><td data-label="产品/业务">${esc(entry.product || "—")}</td><td data-label="收款方式">${esc(entry.paymentMethod || "—")}</td><td data-label="金额" class="income">${money(entry.amountCents)}</td><td data-label="备注">${esc(entry.remark || entry.orderDescription || "—")}</td><td data-label="操作" class="ledger-row-actions" colspan="2"><button type="button" data-ledger-action="copy-entry" data-entry-id="${esc(entry.id)}">复制</button><button type="button" data-ledger-action="edit-entry" data-entry-id="${esc(entry.id)}">编辑</button><button type="button" class="danger" data-ledger-action="delete-entry" data-entry-id="${esc(entry.id)}">删除</button></td></tr>`).join("");
+    if (!records.length) return '<tr><td colspan="11"><div class="ledger-empty"><span><strong>当前筛选条件下没有收入记录</strong><br>原有数据未被删除，可以清除筛选或切换月份查看。</span></div></td></tr>';
+    return records.map((entry) => `<tr><td data-label="日期和时间"><strong>${esc(entry.date)}</strong><small>${esc(entry.time || "未填写时间")}</small></td><td data-label="来源">${sourceBadge(entry)}</td><td data-label="收入分类">${esc(entryCategoryName(entry))}</td><td data-label="客户编码">${esc(entry.customerCode || "—")}</td><td data-label="客户名称">${esc(entry.customerName || "—")}</td><td data-label="产品/业务">${esc(entry.product || "—")}</td><td data-label="收款方式">${esc(entry.paymentMethod || "—")}</td><td data-label="金额" class="income">${money(entry.amountCents)}</td><td data-label="备注">${esc(entry.remark || entry.orderDescription || "—")}</td><td data-label="操作" class="ledger-row-actions" colspan="2"><button type="button" data-ledger-action="copy-entry" data-entry-id="${esc(entry.id)}">复制</button><button type="button" data-ledger-action="edit-entry" data-entry-id="${esc(entry.id)}">编辑</button><button type="button" class="danger" data-ledger-action="delete-entry" data-entry-id="${esc(entry.id)}">删除</button></td></tr>`).join("");
   }
 
   function renderExpenses() {
     const today = localDate();
     const filters = state.filters.expenses;
     const filtered = filteredExpenses();
-    const filterHtml = filterField("月份范围", "monthScope", filters.monthScope, { view: "expenses", select: [["current", `当前月份（${state.month}）`], ["all", "全部月份"]] }) + filterField("记录来源", "source", filters.source, { view: "expenses", select: [["all", "全部记录"], ["manual", "手动记录"], ["statement-import", "流水导入"]] }) + filterField("开始日期", "dateFrom", filters.dateFrom, { type: "date", view: "expenses" }) + filterField("结束日期", "dateTo", filters.dateTo, { type: "date", view: "expenses" }) + filterField("支出分类", "category", filters.category, { view: "expenses", select: [["all", "全部分类"], ["第三方代充", "第三方代充"], ["其他支出", "其他支出"]] }) + filterField("第三方或支付对象", "partner", filters.partner, { view: "expenses", placeholder: "搜索名称" }) + filterField("发票状态", "invoiceStatus", filters.invoiceStatus, { view: "expenses", select: [["all", "全部状态"], ["unissued", "未开具"], ["issued", "已开具"], ["not_applicable", "不适用"]] }) + filterField("关键词", "keyword", filters.keyword, { view: "expenses", placeholder: "产品、客户编码或备注" });
+    const filterHtml = filterField("月份范围", "monthScope", filters.monthScope, { view: "expenses", select: [["current", `当前月份（${state.month}）`], ["all", "全部月份"]] }) + filterField("记录来源", "source", filters.source, { view: "expenses", select: [["all", "全部记录"], ["manual", "手动记录"], ["statement-import", "流水导入"]] }) + filterField("开始日期", "dateFrom", filters.dateFrom, { type: "date", view: "expenses" }) + filterField("结束日期", "dateTo", filters.dateTo, { type: "date", view: "expenses" }) + filterField("支出分类", "category", filters.category, { view: "expenses", select: [["all", "全部分类"], ...categoryOptions("expense", "", true)] }) + filterField("第三方群或支付对象", "partner", filters.partner, { view: "expenses", placeholder: "搜索名称" }) + filterField("发票状态", "invoiceStatus", filters.invoiceStatus, { view: "expenses", select: [["all", "全部状态"], ["unissued", "未开具"], ["issued", "已开具"], ["not_applicable", "不适用"]] }) + filterField("关键词", "keyword", filters.keyword, { view: "expenses", placeholder: "产品、客户编码或备注" });
     const activeScope = filters.monthScope === "all" ? "全部月份" : monthLabel();
     const activeSource = filters.source === "manual" ? "手动记录" : filters.source === "statement-import" ? "流水导入" : "全部记录";
     return renderShell(`<section class="ledger-filter-status"><span>当前月份：<strong>${esc(state.month)}</strong></span><span>查看范围：<strong>${esc(activeScope)}</strong></span><span>记录来源：<strong>${esc(activeSource)}</strong></span><span>筛选结果：<strong>${filtered.length} 笔</strong></span></section><section class="ledger-stats">${statCard("筛选后支出", money(sumCents(filtered)), "expense")}${statCard("筛选后今日支出", money(sumCents(filtered.filter((entry) => entry.date === today))), "expense")}${statCard("筛选后支出笔数", String(filtered.length))}${statCard("可开票但未开具", String(filtered.filter((entry) => entry.invoiceEligibility === "available" && entry.invoiceStatus === "unissued").length))}</section><section class="ledger-card ledger-filter-card"><div class="ledger-filter-grid">${filterHtml}</div><div class="ledger-filter-footer"><span>筛选结果：${filtered.length} 笔</span><button class="btn" type="button" data-ledger-action="clear-filters" data-filter-view="expenses">清除筛选，查看全部记录</button>${detailToolbar("expense")}</div></section><section class="ledger-card ledger-list-card"><div class="ledger-table-wrap"><table class="ledger-table ledger-detail-table"><thead><tr><th>日期和时间</th><th>来源</th><th>支出分类</th><th>第三方群或支付对象</th><th>产品/业务</th><th>关联客户编码</th><th>金额</th><th>发票状态</th><th>备注</th><th colspan="2">操作</th></tr></thead><tbody>${expenseRows(filtered)}</tbody></table></div></section>`);
@@ -604,11 +740,11 @@
     const today = localDate();
     const filters = state.filters.income;
     const filtered = filteredIncome();
-    const filterHtml = filterField("月份范围", "monthScope", filters.monthScope, { view: "income", select: [["current", `当前月份（${state.month}）`], ["all", "全部月份"]] }) + filterField("记录来源", "source", filters.source, { view: "income", select: [["all", "全部记录"], ["manual", "手动记录"], ["statement-import", "流水导入"]] }) + filterField("开始日期", "dateFrom", filters.dateFrom, { type: "date", view: "income" }) + filterField("结束日期", "dateTo", filters.dateTo, { type: "date", view: "income" }) + filterField("客户编码或名称", "customer", filters.customer, { view: "income", placeholder: "搜索客户" }) + filterField("产品/业务", "product", filters.product, { view: "income", placeholder: "搜索产品或业务" }) + filterField("收款方式", "paymentMethod", filters.paymentMethod, { view: "income", placeholder: "例如：微信" }) + filterField("关键词", "keyword", filters.keyword, { view: "income", placeholder: "订单说明或备注" });
+    const filterHtml = filterField("月份范围", "monthScope", filters.monthScope, { view: "income", select: [["current", `当前月份（${state.month}）`], ["all", "全部月份"]] }) + filterField("记录来源", "source", filters.source, { view: "income", select: [["all", "全部记录"], ["manual", "手动记录"], ["statement-import", "流水导入"]] }) + filterField("开始日期", "dateFrom", filters.dateFrom, { type: "date", view: "income" }) + filterField("结束日期", "dateTo", filters.dateTo, { type: "date", view: "income" }) + filterField("收入分类", "category", filters.category, { view: "income", select: [["all", "全部分类"], ...categoryOptions("income", "", true)] }) + filterField("客户编码或名称", "customer", filters.customer, { view: "income", placeholder: "搜索客户" }) + filterField("产品/业务", "product", filters.product, { view: "income", placeholder: "搜索产品或业务" }) + filterField("收款方式", "paymentMethod", filters.paymentMethod, { view: "income", placeholder: "例如：微信" }) + filterField("关键词", "keyword", filters.keyword, { view: "income", placeholder: "订单说明或备注" });
     const total = sumCents(filtered);
     const activeScope = filters.monthScope === "all" ? "全部月份" : monthLabel();
     const activeSource = filters.source === "manual" ? "手动记录" : filters.source === "statement-import" ? "流水导入" : "全部记录";
-    return renderShell(`<section class="ledger-filter-status"><span>当前月份：<strong>${esc(state.month)}</strong></span><span>查看范围：<strong>${esc(activeScope)}</strong></span><span>记录来源：<strong>${esc(activeSource)}</strong></span><span>筛选结果：<strong>${filtered.length} 笔</strong></span></section><section class="ledger-stats">${statCard("筛选后收入", money(total), "income")}${statCard("筛选后今日收入", money(sumCents(filtered.filter((entry) => entry.date === today))), "income")}${statCard("筛选后收款笔数", String(filtered.length))}${statCard("筛选后平均每笔", money(filtered.length ? Math.round(total / filtered.length) : 0))}</section><section class="ledger-card ledger-filter-card"><div class="ledger-filter-grid">${filterHtml}</div><div class="ledger-filter-footer"><span>筛选结果：${filtered.length} 笔</span><button class="btn" type="button" data-ledger-action="clear-filters" data-filter-view="income">清除筛选，查看全部记录</button>${detailToolbar("income")}</div></section><section class="ledger-card ledger-list-card"><div class="ledger-table-wrap"><table class="ledger-table ledger-detail-table"><thead><tr><th>日期和时间</th><th>来源</th><th>客户编码</th><th>客户名称</th><th>产品/业务</th><th>收款方式</th><th>金额</th><th>备注</th><th colspan="2">操作</th></tr></thead><tbody>${incomeRows(filtered)}</tbody></table></div></section>`);
+    return renderShell(`<section class="ledger-filter-status"><span>当前月份：<strong>${esc(state.month)}</strong></span><span>查看范围：<strong>${esc(activeScope)}</strong></span><span>记录来源：<strong>${esc(activeSource)}</strong></span><span>筛选结果：<strong>${filtered.length} 笔</strong></span></section><section class="ledger-stats">${statCard("筛选后收入", money(total), "income")}${statCard("筛选后今日收入", money(sumCents(filtered.filter((entry) => entry.date === today))), "income")}${statCard("筛选后收款笔数", String(filtered.length))}${statCard("筛选后平均每笔", money(filtered.length ? Math.round(total / filtered.length) : 0))}</section><section class="ledger-card ledger-filter-card"><div class="ledger-filter-grid">${filterHtml}</div><div class="ledger-filter-footer"><span>筛选结果：${filtered.length} 笔</span><button class="btn" type="button" data-ledger-action="clear-filters" data-filter-view="income">清除筛选，查看全部记录</button>${detailToolbar("income")}</div></section><section class="ledger-card ledger-list-card"><div class="ledger-table-wrap"><table class="ledger-table ledger-detail-table"><thead><tr><th>日期和时间</th><th>来源</th><th>收入分类</th><th>客户编码</th><th>客户名称</th><th>产品/业务</th><th>收款方式</th><th>金额</th><th>备注</th><th colspan="2">操作</th></tr></thead><tbody>${incomeRows(filtered)}</tbody></table></div></section>`);
   }
 
   function renderManual() {
@@ -622,12 +758,12 @@
     const monthFilter = filterField("月份范围", "monthScope", monthScope, { view: "manual", select: [["current", `当前月份（${state.month}）`], ["all", "全部月份"]] });
     const typeFilter = filterField("记录类型", "type", type, { view: "manual", select: [["all", "全部收支"], ["income", "仅收入"], ["expense", "仅支出"]] });
     const empty = records.length ? "" : '<div class="ledger-empty-state" role="status"><strong>当前筛选条件下没有手动记录</strong><span>原有数据未被删除，可以清除筛选或切换月份查看。</span></div>';
-    return renderShell(`<section class="ledger-card ledger-manual-intro"><div><span class="section-kicker">DAILY HANDOFF</span><h2>客服日常登记与交接</h2><p>新增记录固定写入“手动记录”，不会与支付宝或企业微信流水混淆。</p></div><div class="ledger-overview-links"><button class="btn" type="button" data-ledger-action="open-details" data-entry-type="income" data-source="manual">查看收入明细</button><button class="btn" type="button" data-ledger-action="open-details" data-entry-type="expense" data-source="manual">查看支出明细</button></div></section><section class="ledger-card ledger-overview-source-filter"><div class="ledger-filter-grid">${monthFilter}${typeFilter}</div><button class="btn" type="button" data-ledger-action="clear-filters" data-filter-view="manual">清除筛选，查看全部记录</button></section><section class="ledger-filter-status"><span>当前月份：<strong>${esc(state.month)}</strong></span><span>记录来源：<strong>手动记录</strong></span><span>当前筛选结果：<strong>${records.length} 笔</strong></span></section>${empty}<section class="ledger-stats">${statCard("手动收入", money(sumCents(income)), "income manual")}${statCard("手动支出", money(sumCents(expenses)), "expense manual")}${statCard("手动结余", money(sumCents(income) - sumCents(expenses)), "balance")}${statCard("手动记录", String(records.length))}</section>${type !== "expense" ? `<section class="ledger-card ledger-list-card"><header><div><span class="section-kicker">MANUAL INCOME</span><h2>手动收入</h2></div></header><div class="ledger-table-wrap"><table class="ledger-table ledger-detail-table"><thead><tr><th>日期和时间</th><th>来源</th><th>客户编码</th><th>客户名称</th><th>产品/业务</th><th>收款方式</th><th>金额</th><th>备注</th><th colspan="2">操作</th></tr></thead><tbody>${incomeRows(income)}</tbody></table></div></section>` : ""}${type !== "income" ? `<section class="ledger-card ledger-list-card"><header><div><span class="section-kicker">MANUAL EXPENSE</span><h2>手动支出</h2></div></header><div class="ledger-table-wrap"><table class="ledger-table ledger-detail-table"><thead><tr><th>日期和时间</th><th>来源</th><th>支出分类</th><th>第三方群或支付对象</th><th>产品/业务</th><th>关联客户编码</th><th>金额</th><th>发票状态</th><th>备注</th><th colspan="2">操作</th></tr></thead><tbody>${expenseRows(expenses)}</tbody></table></div></section>` : ""}`);
+    return renderShell(`<section class="ledger-card ledger-manual-intro"><div><span class="section-kicker">DAILY HANDOFF</span><h2>客服日常登记与交接</h2><p>新增记录固定写入“手动记录”，不会与支付宝或企业微信流水混淆。</p></div><div class="ledger-overview-links"><button class="btn" type="button" data-ledger-action="categories">分类管理</button><button class="btn primary" type="button" data-ledger-action="partners">新增第三方群</button><button class="btn" type="button" data-ledger-action="open-details" data-entry-type="income" data-source="manual">查看收入明细</button><button class="btn" type="button" data-ledger-action="open-details" data-entry-type="expense" data-source="manual">查看支出明细</button></div></section><section class="ledger-card ledger-overview-source-filter"><div class="ledger-filter-grid">${monthFilter}${typeFilter}</div><button class="btn" type="button" data-ledger-action="clear-filters" data-filter-view="manual">清除筛选，查看全部记录</button></section><section class="ledger-filter-status"><span>当前月份：<strong>${esc(state.month)}</strong></span><span>记录来源：<strong>手动记录</strong></span><span>当前筛选结果：<strong>${records.length} 笔</strong></span></section>${empty}<section class="ledger-stats">${statCard("手动收入", money(sumCents(income)), "income manual")}${statCard("手动支出", money(sumCents(expenses)), "expense manual")}${statCard("手动结余", money(sumCents(income) - sumCents(expenses)), "balance")}${statCard("手动记录", String(records.length))}</section>${type !== "expense" ? `<section class="ledger-card ledger-list-card"><header><div><span class="section-kicker">MANUAL INCOME</span><h2>手动收入</h2></div></header><div class="ledger-table-wrap"><table class="ledger-table ledger-detail-table"><thead><tr><th>日期和时间</th><th>来源</th><th>收入分类</th><th>客户编码</th><th>客户名称</th><th>产品/业务</th><th>收款方式</th><th>金额</th><th>备注</th><th colspan="2">操作</th></tr></thead><tbody>${incomeRows(income)}</tbody></table></div></section>` : ""}${type !== "income" ? `<section class="ledger-card ledger-list-card"><header><div><span class="section-kicker">MANUAL EXPENSE</span><h2>手动支出</h2></div></header><div class="ledger-table-wrap"><table class="ledger-table ledger-detail-table"><thead><tr><th>日期和时间</th><th>来源</th><th>支出分类</th><th>第三方群或支付对象</th><th>产品/业务</th><th>关联客户编码</th><th>金额</th><th>发票状态</th><th>备注</th><th colspan="2">操作</th></tr></thead><tbody>${expenseRows(expenses)}</tbody></table></div></section>` : ""}`);
   }
 
   function statementRows(records) {
     if (!records.length) return '<tr><td colspan="7"><div class="ledger-empty"><span><strong>当前筛选条件下没有流水导入记录</strong><br>原有数据未被删除，可以查看全部月份或重新选择月份。</span></div></td></tr>';
-    return records.map((entry) => `<tr><td data-label="日期和时间"><strong>${esc(entry.date)}</strong><small>${esc(entry.time || "未填写时间")}</small></td><td data-label="平台"><span class="ledger-source-badge imported">${entry.sourcePlatform === "wecom" ? "企业微信" : "支付宝"}</span></td><td data-label="收支">${entry.type === "income" ? "收入" : "支出"}</td><td data-label="分类">${esc(entry.category)}</td><td data-label="产品/业务">${esc(entry.product || entry.sourceRawSummary || "—")}</td><td data-label="金额" class="${entry.type}">${entry.type === "income" ? "+" : "−"}${money(entry.amountCents)}</td><td data-label="操作" class="ledger-row-actions"><button type="button" data-ledger-action="edit-entry" data-entry-id="${esc(entry.id)}">编辑</button><button type="button" data-ledger-action="copy-entry" data-entry-id="${esc(entry.id)}">复制</button></td></tr>`).join("");
+    return records.map((entry) => `<tr><td data-label="日期和时间"><strong>${esc(entry.date)}</strong><small>${esc(entry.time || "未填写时间")}</small></td><td data-label="平台"><span class="ledger-source-badge imported">${entry.sourcePlatform === "wecom" ? "企业微信" : "支付宝"}</span></td><td data-label="收支">${entry.type === "income" ? "收入" : "支出"}</td><td data-label="分类">${esc(entryCategoryName(entry))}</td><td data-label="产品/业务">${esc(entry.product || entry.sourceRawSummary || "—")}</td><td data-label="金额" class="${entry.type}">${entry.type === "income" ? "+" : "−"}${money(entry.amountCents)}</td><td data-label="操作" class="ledger-row-actions"><button type="button" data-ledger-action="edit-entry" data-entry-id="${esc(entry.id)}">编辑</button><button type="button" data-ledger-action="copy-entry" data-entry-id="${esc(entry.id)}">复制</button></td></tr>`).join("");
   }
 
   function renderImport() {
@@ -719,19 +855,19 @@
       invoiceEligibility: "unknown", invoiceStatus: "unissued", orderDescription: "", remark: "",
     };
     const amount = record.amountCents ? (record.amountCents / 100).toFixed(2) : "";
-    const partnerOptions = [["", "请选择第三方（可留空）"], ...partners.map((partner) => [partner.id, partner.name])];
     const codeOptions = customerCodes().map((code) => `<option value="${esc(code)}"></option>`).join("");
     let fields = field(recordType === "income" ? "收款日期" : "支出日期", "date", record.date, { type: "date", required: true }) + field(recordType === "income" ? "收款时间" : "支出时间", "time", record.time, { type: "time" }) + field(recordType === "income" ? "收款金额（元）" : "支出金额（元）", "amount", amount, { type: "number", required: true, min: "0.01", step: "0.01", placeholder: "0.00" });
     if (recordType === "expense") {
-      fields += field("支出分类", "category", record.category, { required: true, select: [["第三方代充", "第三方代充"], ["其他支出", "其他支出"]] }) + field("第三方群", "partnerId", record.partnerId, { select: partnerOptions }) + field("支付对象", "payee", record.payee, { placeholder: "可填写未纳入第三方管理的对象" }) + field("产品或业务", "product", record.product) + field("关联客户编码", "customerCode", record.customerCode, { list: "ledgerCustomerCodes", placeholder: "例如 C000006" }) + field("支付方式", "paymentMethod", record.paymentMethod) + field("是否可开票", "invoiceEligibility", record.invoiceEligibility, { select: [["unknown", "未确认"], ["available", "可开票"], ["unavailable", "不可开票"]] }) + field("发票状态", "invoiceStatus", record.invoiceStatus, { select: [["unissued", "未开具"], ["issued", "已开具"], ["not_applicable", "不适用"]] }) + field("备注", "remark", record.remark, { textarea: true, wide: true });
+      fields += field("支出分类", "category", entryCategoryName(record), { required: true, select: categoryOptions("expense", entryCategoryName(editing)) }) + field("第三方群或支付对象", "partnerId", entryPartnerValue(editing), { select: partnerOptions(editing) }) + field("支付对象", "payee", record.payee, { placeholder: "可填写未纳入第三方管理的对象" }) + field("产品或业务", "product", record.product) + field("关联客户编码", "customerCode", record.customerCode, { list: "ledgerCustomerCodes", placeholder: "例如 C000006" }) + field("支付方式", "paymentMethod", record.paymentMethod) + field("是否可开票", "invoiceEligibility", record.invoiceEligibility, { select: [["unknown", "未确认"], ["available", "可开票"], ["unavailable", "不可开票"]] }) + field("发票状态", "invoiceStatus", record.invoiceStatus, { select: [["unissued", "未开具"], ["issued", "已开具"], ["not_applicable", "不适用"]] }) + field("备注", "remark", record.remark, { textarea: true, wide: true });
     } else {
-      fields += field("客户编码", "customerCode", record.customerCode, { list: "ledgerCustomerCodes", placeholder: "可留空，格式 C＋6位数字" }) + field("客户名称/备注名", "customerName", record.customerName) + field("产品或业务", "product", record.product) + field("收款方式", "paymentMethod", record.paymentMethod) + field("订单说明", "orderDescription", record.orderDescription, { wide: true }) + field("备注", "remark", record.remark, { textarea: true, wide: true });
+      fields += field("收入分类", "category", entryCategoryName(record), { required: true, select: categoryOptions("income", entryCategoryName(editing)) }) + field("客户编码", "customerCode", record.customerCode, { list: "ledgerCustomerCodes", placeholder: "可留空，格式 C＋6位数字" }) + field("客户名称/备注名", "customerName", record.customerName) + field("产品或业务", "product", record.product) + field("收款方式", "paymentMethod", record.paymentMethod) + field("订单说明", "orderDescription", record.orderDescription, { wide: true }) + field("备注", "remark", record.remark, { textarea: true, wide: true });
     }
     modal(`<section class="ledger-modal ledger-entry-modal" role="dialog" aria-modal="true" aria-labelledby="ledgerEntryTitle"><header><div><span class="section-kicker">${recordType === "income" ? "INCOME" : "EXPENSE"}</span><h2 id="ledgerEntryTitle">${editing ? "编辑" : "记录"}${recordType === "income" ? "收入" : "支出"}</h2></div><button type="button" class="ledger-modal-close" data-ledger-action="close-modal" aria-label="关闭">×</button></header><form data-ledger-form="entry" data-entry-type="${recordType}" data-entry-id="${esc(id)}"><div class="ledger-form-grid">${fields}</div><datalist id="ledgerCustomerCodes">${codeOptions}</datalist><p class="ledger-form-error" role="alert"></p><footer><button type="button" class="btn" data-ledger-action="close-modal">取消</button><button type="submit" class="btn primary">${editing ? "保存修改" : "保存记录"}</button></footer></form></section>`);
-    syncInvoiceFields();
+    syncInvoiceFields(true);
+    syncPartnerFields();
   }
 
-  function syncInvoiceFields() {
+  function syncInvoiceFields(preserveHistorical = false) {
     const form = $("[data-ledger-form='entry'][data-entry-type='expense']");
     if (!form) return;
     const eligibility = form.elements.invoiceEligibility.value;
@@ -742,7 +878,8 @@
       const current = ["unissued", "issued"].includes(status.value) ? status.value : "unissued";
       status.innerHTML = `<option value="unissued"${current === "unissued" ? " selected" : ""}>未开具</option><option value="issued"${current === "issued" ? " selected" : ""}>已开具</option>`;
     } else {
-      status.innerHTML = '<option value="unissued">未开具</option>';
+      const current = preserveHistorical && INVOICE_STATUS.has(status.value) ? status.value : "unissued";
+      status.innerHTML = `<option value="${esc(current)}">${esc(invoiceStatusLabel(current))}</option>`;
     }
   }
 
@@ -764,11 +901,24 @@
     if (!validDate(date) || !validTime(time)) return formError(form, "请填写有效的本地日期和时间。");
     if (customerCode && !CUSTOMER_CODE_PATTERN.test(customerCode)) return formError(form, "客户编码必须严格使用 C＋6位数字格式，或留空。");
     const existing = entries.find((entry) => entry.id === id);
+    const category = safeText(data.get("category"), 40);
+    if (!categoryOptions(type, entryCategoryName(existing)).some(([name]) => name === category)) return formError(form, "请选择当前可用的分类。");
+    let partnerId = existing?.partnerId || "";
+    let displayFields = existing && Object.prototype.hasOwnProperty.call(existing, "partnerDisplayName")
+      ? { partnerDisplayName: existing.partnerDisplayName } : {};
+    if (type === "expense" && category === "第三方代充") {
+      const selected = String(data.get("partnerId") || "");
+      const historical = existing && selected === entryPartnerValue(existing);
+      const managed = partners.find((item) => item.id === selected && item.active);
+      if (!selected || (!historical && !managed)) return formError(form, "请选择启用的第三方群或支付对象。");
+      if (managed && !historical) { partnerId = managed.id; displayFields = {}; }
+      else if (managed && !Object.prototype.hasOwnProperty.call(existing || {}, "partnerDisplayName")) { partnerId = managed.id; displayFields = {}; }
+    }
     let invoiceEligibility = type === "expense" ? safeText(data.get("invoiceEligibility"), 30) : "";
     let invoiceStatus = type === "expense" ? safeText(data.get("invoiceStatus"), 30) : "";
     if (invoiceEligibility === "unavailable") invoiceStatus = "not_applicable";
     if (invoiceEligibility === "available" && !["unissued", "issued"].includes(invoiceStatus)) invoiceStatus = "unissued";
-    if (invoiceEligibility === "unknown") invoiceStatus = "unissued";
+    if (invoiceEligibility === "unknown" && !(existing?.invoiceEligibility === "unknown" && invoiceStatus === existing.invoiceStatus)) invoiceStatus = "unissued";
     const sourceFields = existing?.sourcePlatform ? {
       source: "statement-import",
       sourcePlatform: existing.sourcePlatform,
@@ -777,12 +927,13 @@
       sourceImportedAt: existing.sourceImportedAt,
       sourceRawSummary: existing.sourceRawSummary,
       sourceFingerprint: existing.sourceFingerprint,
-    } : { source: "manual" };
+    } : existing ? (existing.source ? { source: existing.source } : {}) : { source: "manual" };
     const next = normalizeEntry({
-      id: existing?.id || createId(type), type, category: type === "income" ? "客户付款" : safeText(data.get("category"), 40), amountCents,
-      date, time, partnerId: type === "expense" ? safeText(data.get("partnerId"), 180) : "", payee: type === "expense" ? safeText(data.get("payee"), 160) : "",
-      customerCode, customerName: type === "income" ? safeText(data.get("customerName"), 120) : "", product: safeText(data.get("product"), 160), paymentMethod: safeText(data.get("paymentMethod"), 100),
-      invoiceEligibility, invoiceStatus, orderDescription: type === "income" ? safeText(data.get("orderDescription"), 300) : "", remark: safeText(data.get("remark"), 500),
+      id: existing?.id || createId(type), type, category, amountCents,
+      ...(existing?.categoryId && category === entryCategoryName(existing) ? { categoryId: existing.categoryId } : {}),
+      date, time, partnerId, ...displayFields, payee: type === "expense" ? (category === "第三方代充" ? existing?.payee || "" : safeText(data.get("payee"), 160)) : existing?.payee || "",
+      customerCode, customerName: type === "income" ? safeText(data.get("customerName"), 120) : existing?.customerName || "", product: safeText(data.get("product"), 160), paymentMethod: safeText(data.get("paymentMethod"), 100),
+      invoiceEligibility, invoiceStatus, orderDescription: type === "income" ? safeText(data.get("orderDescription"), 300) : existing?.orderDescription || "", remark: safeText(data.get("remark"), 500),
       createdAt: existing?.createdAt || nowIso(), updatedAt: nowIso(), ...sourceFields,
     });
     if (!next) return formError(form, "记录字段存在冲突或无效内容，请检查后重试。");
@@ -801,48 +952,39 @@
     notify("记录已删除");
   }
 
-  function openPartners() {
+  function openPartners(id = "") {
+    const editing = partners.find((item) => item.id === id);
     const rows = partners.map((partner) => {
-      const count = entries.filter((entry) => entry.type === "expense" && entry.partnerId === partner.id).length;
-      return `<li><span><strong>${esc(partner.name)}</strong><small>${count} 笔关联支出</small></span><div><button class="btn" type="button" data-ledger-action="rename-partner" data-partner-id="${esc(partner.id)}">重命名</button><button class="btn danger" type="button" data-ledger-action="delete-partner" data-partner-id="${esc(partner.id)}"${count ? " disabled title=\"已有支出记录使用，不能删除\"" : ""}>删除</button></div></li>`;
+      const count = partnerUsage(partner);
+      return `<li><span><strong>${esc(partner.name)}</strong><small>${partner.active ? "使用中" : "已停用"} · ${count} 笔关联支出</small></span><div><button class="btn" type="button" data-ledger-action="rename-partner" data-partner-id="${esc(partner.id)}">编辑</button><button class="btn" type="button" data-ledger-action="toggle-partner" data-partner-id="${esc(partner.id)}">${partner.active ? "停用" : "启用"}</button><button type="button" class="btn danger" data-ledger-action="delete-partner" data-partner-id="${esc(partner.id)}">删除</button></div></li>`;
     }).join("");
-    modal(`<section class="ledger-modal ledger-partner-modal" role="dialog" aria-modal="true" aria-labelledby="ledgerPartnerTitle"><header><div><span class="section-kicker">PARTNERS</span><h2 id="ledgerPartnerTitle">第三方管理</h2></div><button type="button" class="ledger-modal-close" data-ledger-action="close-modal" aria-label="关闭">×</button></header><form data-ledger-form="partner"><label><span>第三方名称</span><input name="name" maxlength="100" required placeholder="例如：第三方合作群 A"></label><button class="btn primary" type="submit">新增第三方</button><p class="ledger-form-error" role="alert"></p></form><ul class="ledger-partner-list">${rows || '<li class="ledger-empty compact">暂无第三方</li>'}</ul></section>`);
+    modal(`<section class="ledger-modal ledger-partner-modal" role="dialog" aria-modal="true" aria-labelledby="ledgerPartnerTitle"><header><h2 id="ledgerPartnerTitle">第三方群管理</h2><button type="button" class="ledger-modal-close" data-ledger-action="close-modal" aria-label="关闭">×</button></header><p>维护常用第三方群或支付对象；停用后保留历史关联。名称为 1–100 个字符。</p><form data-ledger-form="partner" data-partner-id="${esc(editing?.id || "")}"><label><span>第三方群名称</span><input name="name" maxlength="100" required value="${esc(editing?.name || "")}" placeholder="例如：Claude 成品号供货群"></label><div class="ledger-partner-form-actions"><button class="btn" type="button" data-ledger-action="${editing ? "partners" : "close-modal"}">取消</button><button class="btn primary" type="submit">${editing ? "保存修改" : "新增第三方群"}</button></div><p class="ledger-form-error" role="alert"></p></form><ul class="ledger-partner-list">${rows || '<li class="ledger-empty compact">暂无第三方群，请先新增</li>'}</ul></section>`);
   }
 
   function addPartner(form) {
-    const name = safeText(new FormData(form).get("name"), 100);
-    if (!name) return;
-    if (partners.some((partner) => partner.name.toLocaleLowerCase() === name.toLocaleLowerCase())) return formError(form, "该第三方已存在。");
+    const name = String(new FormData(form).get("name") || "").trim();
+    const existing = partners.find((item) => item.id === form.dataset.partnerId);
+    if (!name || name.length > 100) return formError(form, "请填写 1–100 个字符的第三方群名称。");
+    if (partners.some((item) => item.id !== existing?.id && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) return formError(form, "该第三方群名称已存在（包括已停用群）。");
     const timestamp = nowIso();
-    if (!savePartners([...partners, { id: createId("partner"), name, createdAt: timestamp, updatedAt: timestamp }])) return;
+    const next = { id: existing?.id || createId("partner"), name, active: existing?.active ?? true, createdAt: existing?.createdAt || timestamp, updatedAt: timestamp };
+    if (!savePartners(existing ? partners.map((item) => item.id === existing.id ? next : item) : [...partners, next])) return formError(form, "保存失败，原数据保持不变，请重试。");
+    render();
     openPartners();
-    notify("第三方已新增");
+    notify(existing ? "第三方群名称已更新" : "第三方群已新增，可在支出下拉框选择");
   }
 
-  function renamePartner(id) {
+  function togglePartner(id) {
     const partner = partners.find((item) => item.id === id);
     if (!partner) return;
-    const name = safeText(prompt("请输入新的第三方名称", partner.name), 100);
-    if (!name || name === partner.name) return;
-    if (partners.some((item) => item.id !== id && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) return alert("该第三方名称已存在。");
-    if (!savePartners(partners.map((item) => item.id === id ? { ...item, name, updatedAt: nowIso() } : item))) return;
+    if (!savePartners(partners.map((item) => item.id === id ? { ...item, active: !item.active, updatedAt: nowIso() } : item))) return;
+    render();
     openPartners();
-    notify("第三方已重命名");
-  }
-
-  function deletePartner(id) {
-    const partner = partners.find((item) => item.id === id);
-    if (!partner) return;
-    const count = entries.filter((entry) => entry.type === "expense" && entry.partnerId === id).length;
-    if (count) return alert(`该第三方关联了 ${count} 笔支出，不能直接删除。`);
-    if (!confirm(`确定删除第三方“${partner.name}”吗？`)) return;
-    if (!savePartners(partners.filter((item) => item.id !== id))) return;
-    openPartners();
-    notify("第三方已删除");
+    notify(partner.active ? "第三方群已停用，历史记录保持不变" : "第三方群已启用");
   }
 
   function downloadBackup() {
-    const backup = { backupType: BACKUP_TYPE, schemaVersion: SCHEMA_VERSION, exportedAt: nowIso(), entries, partners };
+    const backup = { backupType: BACKUP_TYPE, schemaVersion: SCHEMA_VERSION, exportedAt: nowIso(), entries, partners, categories };
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -867,7 +1009,8 @@
       if (!parsed || parsed.backupType !== BACKUP_TYPE || parsed.schemaVersion !== SCHEMA_VERSION || !Array.isArray(parsed.entries) || !Array.isArray(parsed.partners) || typeof parsed.exportedAt !== "string" || Number.isNaN(Date.parse(parsed.exportedAt))) throw new Error("文件结构不正确，不是有效的记账台备份。");
       const entryIds = new Set(entries.map((entry) => entry.id));
       const partnerIds = new Set(partners.map((partner) => partner.id));
-      const additions = { entries: [], partners: [] };
+      const additions = { entries: [], partners: [], categories: [] };
+      if (parsed.categories !== undefined && !Array.isArray(parsed.categories)) throw new Error("分类备份格式无效。");
       let invalid = 0;
       let duplicate = 0;
       for (const raw of parsed.entries) {
@@ -882,22 +1025,43 @@
         else if (partnerIds.has(partner.id)) duplicate += 1;
         else { partnerIds.add(partner.id); additions.partners.push(partner); }
       }
+      for (const raw of parsed.categories || []) {
+        const category = normalizeCategory(raw);
+        if (!category) invalid += 1;
+        else if ([...categories, ...additions.categories].some((item) => item.id === category.id || (item.type === category.type && item.name.toLocaleLowerCase() === category.name.toLocaleLowerCase()))) duplicate += 1;
+        else additions.categories.push(category);
+      }
       importPreview = { ...additions, invalid, duplicate };
-      target.innerHTML = `<h3>导入预览</h3><div class="ledger-preview-stats"><span><strong>${additions.entries.length + additions.partners.length}</strong>可导入</span><span><strong>${duplicate}</strong>重复</span><span><strong>${invalid}</strong>无效</span></div><p>其中 ${additions.entries.length} 笔收支记录、${additions.partners.length} 个第三方可安全合并；重复项不会覆盖，无效数据会跳过。</p><button class="btn primary" type="button" data-ledger-action="confirm-import"${additions.entries.length + additions.partners.length ? "" : " disabled"}>确认安全合并</button>`;
+      target.innerHTML = `<h3>导入预览</h3><div class="ledger-preview-stats"><span><strong>${additions.entries.length + additions.partners.length + additions.categories.length}</strong>可导入</span><span><strong>${duplicate}</strong>重复</span><span><strong>${invalid}</strong>无效</span></div><p>其中 ${additions.entries.length} 笔收支记录、${additions.partners.length} 个第三方、${additions.categories.length} 个分类可安全合并；重复项不会覆盖，无效数据会跳过。</p><button class="btn primary" type="button" data-ledger-action="confirm-import"${additions.entries.length + additions.partners.length + additions.categories.length ? "" : " disabled"}>确认安全合并</button>`;
     } catch (error) {
       target.innerHTML = `<p class="ledger-import-error">${esc(error.message || "备份文件读取失败。")}</p>`;
     }
   }
 
   function confirmImport() {
-    if (!importPreview || !confirm(`确认合并 ${importPreview.entries.length} 笔记录和 ${importPreview.partners.length} 个第三方吗？现有数据不会被覆盖。`)) return;
+    if (!importPreview || !confirm(`确认合并 ${importPreview.entries.length} 笔记录、${importPreview.partners.length} 个第三方和 ${importPreview.categories.length} 个分类吗？现有数据不会被覆盖。`)) return;
     if (!canWrite()) return;
     const nextEntries = [...entries, ...importPreview.entries];
     const nextPartners = [...partners, ...importPreview.partners];
-    if (!writeJson(ENTRIES_KEY, { version: SCHEMA_VERSION, entries: nextEntries }) || !writeJson(PARTNERS_KEY, { version: SCHEMA_VERSION, partners: nextPartners })) return;
+    const nextCategories = [...categories, ...importPreview.categories];
+    // Roll back exact stored bytes if any part of this multi-key append fails.
+    const writes = [[ENTRIES_KEY, { version: SCHEMA_VERSION, entries: nextEntries }], [PARTNERS_KEY, { version: SCHEMA_VERSION, partners: nextPartners }], [CATEGORIES_KEY, { version: SCHEMA_VERSION, categories: nextCategories }]];
+    const previous = [];
+    try {
+      for (const [key] of writes) previous.push([key, localStorage.getItem(key)]);
+      for (const [key, value] of writes) localStorage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+      for (const [key, value] of previous) {
+        try { if (localStorage.getItem(key) !== value) { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value); } }
+        catch (rollbackError) { storageMessage = "备份恢复失败且存储回滚受阻，请保留备份并检查浏览器存储权限。"; }
+      }
+      alert(storageMessage || "备份保存失败，未更改页面数据，请重试。");
+      return;
+    }
+    categories = nextCategories;
     entries = nextEntries;
     partners = nextPartners;
-    const importedCount = importPreview.entries.length + importPreview.partners.length;
+    const importedCount = importPreview.entries.length + importPreview.partners.length + importPreview.categories.length;
     const skipped = importPreview.invalid;
     importPreview = null;
     closeAll(true);
@@ -909,11 +1073,11 @@
     const entry = entries.find((item) => item.id === id);
     if (!entry) return;
     const lines = entry.type === "income" ? [
-      `记录来源：${entrySourceLabel(entry)}`, `收款时间：${entry.date} ${entry.time || ""}`.trim(), `客户编码：${entry.customerCode || "未关联"}`, `客户名称：${entry.customerName || "未填写"}`,
+      `记录来源：${entrySourceLabel(entry)}`, `收入分类：${entryCategoryName(entry)}`, `收款时间：${entry.date} ${entry.time || ""}`.trim(), `客户编码：${entry.customerCode || "未关联"}`, `客户名称：${entry.customerName || "未填写"}`,
       `产品/业务：${entry.product || "未填写"}`, `收款方式：${entry.paymentMethod || "未填写"}`, `收入金额：${money(entry.amountCents)}`,
       entry.orderDescription ? `订单说明：${entry.orderDescription}` : "", entry.remark ? `备注：${entry.remark}` : "",
     ] : [
-      `记录来源：${entrySourceLabel(entry)}`, `支出时间：${entry.date} ${entry.time || ""}`.trim(), `支出分类：${entry.category}`, `第三方/对象：${partnerName(entry.partnerId) || entry.payee || "未填写"}`,
+      `记录来源：${entrySourceLabel(entry)}`, `支出时间：${entry.date} ${entry.time || ""}`.trim(), `支出分类：${entryCategoryName(entry)}`, `第三方/对象：${entryPartnerName(entry) || "未填写"}`,
       `产品/业务：${entry.product || "未填写"}`, `支出金额：${money(entry.amountCents)}`, `发票：${invoiceEligibilityLabel(entry.invoiceEligibility)} · ${invoiceStatusLabel(entry.invoiceStatus)}`,
       entry.remark ? `备注：${entry.remark}` : "",
     ];
@@ -979,7 +1143,7 @@
       };
     } else {
       const partnerId = candidate.target === "third_party" ? safeText(candidate.partnerId, 180) : "";
-      if (candidate.target === "third_party" && !partners.some((partner) => partner.id === partnerId)) {
+      if (candidate.target === "third_party" && !partners.some((partner) => partner.id === partnerId && partner.active)) {
         return { status: "needsSupplement", reason: "第三方代充需选择已有第三方" };
       }
       raw = {
@@ -1075,7 +1239,7 @@
 
   function getImportPartners() {
     ensureInitialized();
-    return partners.map(({ id, name }) => ({ id, name }));
+    return partners.filter((partner) => partner.active).map(({ id, name }) => ({ id, name }));
   }
 
   function handleClick(event) {
@@ -1088,9 +1252,19 @@
     else if (action === "edit-entry") openEntryForm("", button.dataset.entryId);
     else if (action === "copy-entry") copyEntryText(button.dataset.entryId);
     else if (action === "delete-entry") deleteEntry(button.dataset.entryId);
+    else if (action === "delete-category") deleteManaged("category", button.dataset.categoryId);
+    else if (action === "delete-partner") deleteManaged("partner", button.dataset.partnerId);
+    else if (action === "categories") openCategories();
+    else if (action === "edit-category") openCategories(button.dataset.categoryId);
+    else if (action === "toggle-category") {
+      const item = categories.find((item) => item.id === button.dataset.categoryId);
+      if (item && saveCategories(categories.map((entry) => entry.id === item.id ? { ...entry, active: !entry.active, updatedAt: nowIso() } : entry))) {
+        render(); openCategories(); notify(item.active ? "分类已停用，历史记录保持不变" : "分类已启用");
+      }
+    }
     else if (action === "partners") openPartners();
-    else if (action === "rename-partner") renamePartner(button.dataset.partnerId);
-    else if (action === "delete-partner") deletePartner(button.dataset.partnerId);
+    else if (action === "rename-partner") openPartners(button.dataset.partnerId);
+    else if (action === "toggle-partner") togglePartner(button.dataset.partnerId);
     else if (action === "close-modal") closeAll(true);
     else if (action === "data-manager") {
       state.view = "data";
@@ -1141,6 +1315,7 @@
       render();
       return;
     }
+    if (event.target.matches("[data-ledger-form='entry'] [name='category']")) syncPartnerFields();
     if (event.target.matches("[data-ledger-import]")) previewImport(event.target.files?.[0]);
     if (event.target.matches("[data-ledger-form='entry'] [name='invoiceEligibility']")) syncInvoiceFields();
   }
@@ -1164,6 +1339,7 @@
     if (!form) return;
     event.preventDefault();
     if (form.dataset.ledgerForm === "entry") saveEntryForm(form);
+    if (form.dataset.ledgerForm === "category") saveCategoryForm(form);
     if (form.dataset.ledgerForm === "partner") addPartner(form);
   }
 
