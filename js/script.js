@@ -73,6 +73,15 @@ const KEY = "zy_kb_system_v2",
       let expenseFilters = { date: "", groupId: "all" };
       let mailAccounts = loadMailAccounts();
       let mailBatchDraft = null;
+      let gmailTabActive = false;
+      globalThis.GmailAccounts?.configure?.({
+        getCustomerCodes: () => customerCodes.map((record) => record.code),
+        isCustomerCode: (value) => CUSTOMER_CODE_PATTERN.test(value),
+        notify: (message) => toast(message),
+        rerender: () => {
+          if (mode === "mail-accounts") renderMailAccountManager();
+        },
+      });
       let mailSourceBatchFilter = "all";
       let mailStatusFilter =
         globalThis.RechargeCodes?.getMailStatusFilter?.() || "all";
@@ -687,8 +696,10 @@ const KEY = "zy_kb_system_v2",
         renderMailAccountManager();
       }
       function setMailManagerTab(value) {
+        gmailTabActive = value === "gmail";
+        globalThis.GmailAccounts?.conceal?.();
         const nextTab = value === "recharge" ? "recharge" : "mail";
-        if (nextTab !== "mail") closeMailEditModal();
+        if (value !== "mail") closeMailEditModal();
         globalThis.RechargeCodes?.setActiveTab?.(nextTab);
         renderMailAccountManager();
       }
@@ -720,8 +731,8 @@ const KEY = "zy_kb_system_v2",
         editing = false;
         setMode("mail-accounts");
         renderNav();
-        renderList([], "成品号邮箱/卡密管理");
-        const activeTab = globalThis.RechargeCodes?.getActiveTab?.() || "mail";
+        renderList([], "成品号 Mail / Gmail 邮箱 / 卡密管理");
+        const activeTab = gmailTabActive ? "gmail" : (globalThis.RechargeCodes?.getActiveTab?.() || "mail");
         const sourceBatches = [...new Set(mailAccounts.map((record) => record.sourceBatch).filter(Boolean))]
           .sort((a, b) => a.localeCompare(b, "zh-CN"));
         const records = [...mailAccounts]
@@ -736,7 +747,7 @@ const KEY = "zy_kb_system_v2",
         const rechargeContent = globalThis.RechargeCodes?.renderPane?.() ||
           '<section class="manager-panel recharge-code-error" role="alert">卡密模块加载失败，已停止所有卡密操作。</section>';
         $("#main").innerHTML =
-          `<div class="manager-page mail-manager-page"><header class="manager-page-header"><div><span class="section-kicker">MAIL & RECHARGE CODE</span><h1>成品号邮箱/卡密管理</h1><p>统一管理成品号邮箱交付和充值卡密使用状态。</p></div><button type="button" class="btn" onclick="showHome()">返回首页</button></header><div class="mail-manager-tabs" role="tablist" aria-label="成品号邮箱和充值卡密"><button id="mailManagerMailTab" type="button" role="tab" aria-selected="${activeTab === "mail"}" class="${activeTab === "mail" ? "is-active" : ""}" onclick="setMailManagerTab('mail')">成品号邮箱</button><button id="mailManagerRechargeTab" type="button" role="tab" aria-selected="${activeTab === "recharge"}" class="${activeTab === "recharge" ? "is-active" : ""}" onclick="setMailManagerTab('recharge')">充值卡密</button></div>${activeTab === "recharge" ? rechargeContent : mailContent}</div>`;
+          `<div class="manager-page mail-manager-page"><header class="manager-page-header"><div><span class="section-kicker">MAIL & RECHARGE CODE</span><h1>成品号 Mail / Gmail 邮箱 / 卡密管理</h1><p>统一管理成品号邮箱、Gmail 邮箱与充值卡密的库存、交付和使用状态。</p></div><button type="button" class="btn" onclick="showHome()">返回首页</button></header><div class="mail-manager-tabs" role="tablist" aria-label="成品号 Mail、Gmail 邮箱和充值卡密"><button id="mailManagerMailTab" type="button" role="tab" aria-selected="${activeTab === "mail"}" class="${activeTab === "mail" ? "is-active" : ""}" onclick="setMailManagerTab('mail')">成品号 Mail</button><button id="mailManagerGmailTab" type="button" role="tab" aria-selected="${activeTab === "gmail"}" class="${activeTab === "gmail" ? "is-active" : ""}" onclick="setMailManagerTab('gmail')">Gmail 邮箱</button><button id="mailManagerRechargeTab" type="button" role="tab" aria-selected="${activeTab === "recharge"}" class="${activeTab === "recharge" ? "is-active" : ""}" onclick="setMailManagerTab('recharge')">充值卡密</button></div>${activeTab === "gmail" ? (globalThis.GmailAccounts?.renderPane?.() || '<section class="manager-panel" role="alert">Gmail 模块加载失败。</section>') : activeTab === "recharge" ? rechargeContent : mailContent}</div>`;
         persistUiState();
       }
       function createEmptyCustomerCodeDocument() {
@@ -7794,6 +7805,7 @@ const KEY = "zy_kb_system_v2",
           closeGalleryVersionDialog(true);
           finishGalleryAssetDrag(null, false);
         }
+        if (m !== "mail-accounts") globalThis.GmailAccounts?.conceal?.();
         mode = m;
         const app = document.querySelector(".app");
         if (m !== "ledger") globalThis.LedgerWorkbench?.closeAll(true);
@@ -8264,8 +8276,9 @@ const KEY = "zy_kb_system_v2",
         const deliveredMailCount = mailAccounts.filter(isMailDelivered).length;
         const rechargeSummary = globalThis.RechargeCodes?.getSummary?.();
         const rechargeSummaryOk = Boolean(rechargeSummary?.ok);
+        const gmailSummary = globalThis.GmailAccounts?.getSummary?.();
         $("#main").innerHTML =
-          `<div class="dashboard"><header class="dashboard-heading"><div><span class="section-kicker">客服工作台</span><h1>智源客服知识库</h1><p>统一管理客服话术、产品资料、售后规则和新人培训内容。</p></div><span class="dashboard-date">知识与核算，一站处理</span></header>${renderRefundCalculator()}<section class="home-feed-grid home-shortcut-grid" aria-label="工作管理入口"><section class="home-feed-card home-shortcut expense-shortcut" aria-labelledby="homeLedgerTitle" onclick="openLedgerWorkbench()"><header><div><span class="home-feed-eyebrow">LEDGER WORKBENCH</span><h2 id="homeLedgerTitle">记账台</h2></div><button type="button" onclick="event.stopPropagation();openLedgerWorkbench()">进入管理</button></header><div class="home-shortcut-summary"><span><strong>收支</strong><small>月度概览</small></span><span><strong>明细</strong><small>收入与支出</small></span></div><p>集中登记收入和支出，实时查看月度结余。</p></section><section class="home-feed-card home-shortcut mail-shortcut" aria-labelledby="homeMailTitle" onclick="renderMailAccountManager()"><header><div><span class="home-feed-eyebrow">MAIL & RECHARGE CODE</span><h2 id="homeMailTitle">成品号邮箱/卡密管理</h2></div><button type="button" onclick="event.stopPropagation();renderMailAccountManager()">进入管理</button></header><div class="home-shortcut-summary"><span><strong>${mailAccounts.length - deliveredMailCount}</strong><small>未交付邮箱</small></span><span><strong>${rechargeSummaryOk ? rechargeSummary.available : "异常"}</strong><small>${rechargeSummaryOk ? "可用卡密" : "卡密数据异常"}</small></span></div><p>管理邮箱交付与充值卡密库存、使用和备份。</p></section><section class="home-feed-card home-shortcut customer-code-shortcut" aria-labelledby="homeCustomerCodeTitle" onclick="showCustomerCodeManager()"><header><div><span class="home-feed-eyebrow">CUSTOMER CODE</span><h2 id="homeCustomerCodeTitle">客户编码</h2></div><button type="button" onclick="event.stopPropagation();showCustomerCodeManager()">进入管理</button></header><form class="home-customer-code-form" onsubmit="handleHomeCustomerCodeSearch(event)" onclick="event.stopPropagation()"><label for="homeCustomerCodeInput">快捷查询</label><div><input id="homeCustomerCodeInput" type="text" placeholder="输入客户编码" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="submit">查询</button></div><small>严格格式：C＋6位数字</small></form></section></section></div>`;
+          `<div class="dashboard"><header class="dashboard-heading"><div><span class="section-kicker">客服工作台</span><h1>智源客服知识库</h1><p>统一管理客服话术、产品资料、售后规则和新人培训内容。</p></div><span class="dashboard-date">知识与核算，一站处理</span></header>${renderRefundCalculator()}<section class="home-feed-grid home-shortcut-grid" aria-label="工作管理入口"><section class="home-feed-card home-shortcut expense-shortcut" aria-labelledby="homeLedgerTitle" onclick="openLedgerWorkbench()"><header><div><span class="home-feed-eyebrow">LEDGER WORKBENCH</span><h2 id="homeLedgerTitle">记账台</h2></div><button type="button" onclick="event.stopPropagation();openLedgerWorkbench()">进入管理</button></header><div class="home-shortcut-summary"><span><strong>收支</strong><small>月度概览</small></span><span><strong>明细</strong><small>收入与支出</small></span></div><p>集中登记收入和支出，实时查看月度结余。</p></section><section class="home-feed-card home-shortcut mail-shortcut" aria-labelledby="homeMailTitle" onclick="renderMailAccountManager()"><header><div><span class="home-feed-eyebrow">MAIL & RECHARGE CODE</span><h2 id="homeMailTitle">成品号 Mail / Gmail 邮箱 / 卡密管理</h2></div><button type="button" onclick="event.stopPropagation();renderMailAccountManager()">进入管理</button></header><div class="home-shortcut-summary"><span><strong>${mailAccounts.length - deliveredMailCount}</strong><small>未交付 Mail</small></span><span><strong>${gmailSummary?.ok ? gmailSummary.available : "异常"}</strong><small>可用 Gmail</small></span><span><strong>${rechargeSummaryOk ? rechargeSummary.available : "异常"}</strong><small>${rechargeSummaryOk ? "可用卡密" : "卡密数据异常"}</small></span></div><p>统一管理成品号邮箱、Gmail 邮箱与充值卡密的库存、交付和使用状态。</p></section><section class="home-feed-card home-shortcut customer-code-shortcut" aria-labelledby="homeCustomerCodeTitle" onclick="showCustomerCodeManager()"><header><div><span class="home-feed-eyebrow">CUSTOMER CODE</span><h2 id="homeCustomerCodeTitle">客户编码</h2></div><button type="button" onclick="event.stopPropagation();showCustomerCodeManager()">进入管理</button></header><form class="home-customer-code-form" onsubmit="handleHomeCustomerCodeSearch(event)" onclick="event.stopPropagation()"><label for="homeCustomerCodeInput">快捷查询</label><div><input id="homeCustomerCodeInput" type="text" placeholder="输入客户编码" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="submit">查询</button></div><small>严格格式：C＋6位数字</small></form></section></section></div>`;
         calc();
         persistUiState();
       }

@@ -5723,7 +5723,7 @@
       }
       .mail-manager-tabs {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 7px;
         border: 1px solid rgba(255, 255, 255, 0.86);
         border-radius: 15px;
@@ -6797,3 +6797,36 @@
   .ledger-category-modal .ledger-partner-list li,
   .ledger-partner-modal .ledger-partner-list li { align-items: stretch; flex-direction: column; }
 }
+
+      /* Gmail 独立列表，沿用管理页面的卡片与弹窗体系。 */
+      .mail-shortcut .home-shortcut-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .mail-shortcut > header { flex-wrap: wrap; }
+      .mail-shortcut > header > div { flex: 1 1 160px; }
+      .mail-shortcut > header > button { flex: 0 0 auto; white-space: nowrap; }
+      .mail-shortcut .home-shortcut-summary { gap: 6px; }
+      .mail-shortcut .home-shortcut-summary > span { padding: 10px 3px; }
+      .mail-shortcut .home-shortcut-summary small { font-size: 10px; white-space: nowrap; }
+      .gmail-filters { grid-template-columns: minmax(120px, .7fr) minmax(140px, 1fr) minmax(200px, 2fr); }
+      .gmail-list-head, .gmail-record {
+        display: grid;
+        grid-template-columns: minmax(150px, 1.6fr) minmax(100px, 1fr) minmax(100px, 1fr) minmax(80px, .7fr) minmax(96px, .8fr) minmax(70px, .6fr) minmax(88px, .8fr);
+        gap: 12px; align-items: center; padding: 13px 14px;
+      }
+      .gmail-list-head { color: var(--muted); font-size: 12px; font-weight: 800; }
+      .gmail-record { border: 1px solid #e5e8f1; border-radius: 14px; margin-top: 9px; background: rgba(255,255,255,.86); font-size: 12px; }
+      .gmail-record > div { min-width: 0; overflow-wrap: anywhere; }
+      .gmail-secret, .gmail-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+      .gmail-secret code { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .gmail-record .btn { padding: 5px 9px; font-size: 11px; }
+      .gmail-preview-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .gmail-preview-list { max-height: 280px; overflow: auto; overflow-wrap: anywhere; }
+      @media (max-width: 1280px) {
+        .gmail-list-head { display: none; }
+        .gmail-record { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .gmail-record > div::before { content: attr(data-label); display: block; width: 100%; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+        .gmail-record > div:first-child { grid-column: 1 / -1; }
+      }
+      @media (max-width: 600px) {
+        .gmail-filters { grid-template-columns: 1fr; }
+        .mail-shortcut .home-shortcut-summary > span { padding: 9px 7px; }
+      }
