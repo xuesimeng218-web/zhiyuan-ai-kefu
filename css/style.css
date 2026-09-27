@@ -568,6 +568,18 @@
       .sideactions button:active {
         transform: translateY(0);
       }
+      .sideactions button.danger {
+        grid-column: 1 / -1;
+        border-color: rgba(207, 75, 86, 0.24);
+        background: rgba(255, 238, 241, 0.76);
+        color: #bd4050;
+      }
+      .sideactions button.danger:hover,
+      .sideactions button.danger:focus-visible {
+        border-color: rgba(207, 75, 86, 0.42);
+        background: rgba(255, 232, 236, 0.94);
+        color: #a92f40;
+      }
       .middle {
         background: #fafbfe;
         border-right: 1px solid var(--line);
@@ -4854,6 +4866,25 @@
         color: #596276;
         cursor: pointer;
         font-size: 22px;
+      }
+      .clear-local-data-dialog {
+        width: min(100%, 520px);
+      }
+      .clear-local-data-dialog > p {
+        line-height: 1.75;
+      }
+      .clear-local-data-dialog > footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 18px;
+        border-top: 1px solid #e8ebf2;
+        padding-top: 14px;
+      }
+      .clear-local-data-dialog .btn.danger {
+        border-color: #cf4b56;
+        background: #cf4b56;
+        color: #fff;
       }
       .ledger-form-grid {
         display: grid;

@@ -56,6 +56,7 @@ const KEY = "zy_kb_system_v2",
         activeG = 0,
         activeI = 0,
         editing = false;
+      let isClearingLocalData = false;
       let activeArticleVisible = false;
       let uiStateRestoring = false;
       let uiStateSaveTimer = null;
@@ -196,6 +197,7 @@ const KEY = "zy_kb_system_v2",
         }
       }
       function saveManagerDocument(key, field, records) {
+        if (isClearingLocalData) return false;
         try {
           localStorage.setItem(
             key,
@@ -7565,6 +7567,7 @@ const KEY = "zy_kb_system_v2",
         }
       }
       function save() {
+        if (isClearingLocalData) return;
         hydrateGroups();
         favs = normalizeStoredIds(favs);
         recent = normalizeStoredIds(recent);
@@ -7610,7 +7613,7 @@ const KEY = "zy_kb_system_v2",
         };
       }
       function persistUiState() {
-        if (uiStateRestoring) return;
+        if (uiStateRestoring || isClearingLocalData) return;
         try {
           sessionStorage.setItem(UI_STATE_KEY, JSON.stringify(buildUiState()));
         } catch (error) {
@@ -8661,6 +8664,74 @@ const KEY = "zy_kb_system_v2",
           "智源AI客服知识库备份.json",
           JSON.stringify(exportGroups, null, 2),
         );
+      }
+      function closeClearLocalDataDialog() {
+        if (isClearingLocalData) return;
+        $("#clearLocalDataDialog")?.remove();
+      }
+      function openClearLocalDataDialog() {
+        if (isClearingLocalData || $("#clearLocalDataDialog")) return;
+        const backdrop = document.createElement("div");
+        backdrop.id = "clearLocalDataDialog";
+        backdrop.className = "ledger-modal-backdrop";
+        backdrop.innerHTML = `<section class="ledger-modal clear-local-data-dialog" role="dialog" aria-modal="true" aria-labelledby="clearLocalDataTitle"><header><div><span class="section-kicker">LOCAL DATA</span><h2 id="clearLocalDataTitle">清除本机数据</h2></div><button type="button" class="ledger-modal-close" aria-label="关闭" onclick="closeClearLocalDataDialog()">×</button></header><p>此操作将清除当前设备中保存的全部知识库数据，包括记账记录、客户编码、成品号邮箱、分类、第三方群等本地数据。</p><p class="ledger-storage-warning"><strong>清除后无法恢复，建议先导出备份。</strong></p><footer><button type="button" class="btn" onclick="closeClearLocalDataDialog()">取消</button><button type="button" class="btn danger" onclick="confirmClearLocalData(this)">确认清除</button></footer></section>`;
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) closeClearLocalDataDialog();
+        });
+        document.body.appendChild(backdrop);
+        requestAnimationFrame(() => backdrop.classList.add("is-open"));
+        backdrop.querySelector("button")?.focus();
+      }
+      function deleteProjectIndexedDb() {
+        if (!globalThis.indexedDB) return Promise.resolve();
+        return Promise.resolve(priceGalleryDbPromise)
+          .then((db) => {
+            db?.close();
+            priceGalleryDbPromise = null;
+          })
+          .catch(() => {
+            priceGalleryDbPromise = null;
+          })
+          .then(
+            () =>
+              new Promise((resolve, reject) => {
+                const request = indexedDB.deleteDatabase(PRICE_GALLERY_DB_NAME);
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+                request.onblocked = () => reject(new Error("blocked"));
+              }),
+          );
+      }
+      function removeProjectStorage(storage) {
+        const keys = [];
+        for (let index = 0; index < storage.length; index += 1) {
+          const key = storage.key(index);
+          if (key?.startsWith("zy_kb_")) keys.push(key);
+        }
+        keys.forEach((key) => storage.removeItem(key));
+      }
+      async function confirmClearLocalData(button) {
+        if (isClearingLocalData) return;
+        button.disabled = true;
+        button.textContent = "正在清除…";
+        try {
+          await deleteProjectIndexedDb();
+          isClearingLocalData = true;
+          clearTimeout(uiStateSaveTimer);
+          removeProjectStorage(localStorage);
+          removeProjectStorage(sessionStorage);
+          $("#clearLocalDataDialog")?.remove();
+          toast("本机数据已清除");
+          setTimeout(() => window.location.reload(), 180);
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = "确认清除";
+          alert(
+            error?.message === "blocked"
+              ? "清除暂时被同站点的其他页面占用，请关闭其他智源客服知识库页面后重试。"
+              : "清除未能完整完成，请重试；如仍失败，请检查浏览器存储权限。",
+          );
+        }
       }
       function importData() {
         let i = document.createElement("input");
