@@ -13,6 +13,7 @@ const KEY = "zy_kb_system_v2",
         MAIL_ACCOUNTS_KEY = "zy_kb_mail_accounts_v1",
         PRICE_GALLERY_META_KEY = "zy_kb_price_gallery_meta_v1",
         GALLERY_COLLECTIONS_KEY = "zy_kb_gallery_collections_v1",
+        SKIP_DEFAULT_SEED_KEY = "zy_kb_skip_default_seed_v1",
         PRICE_GALLERY_DB_NAME = "zy_kb_price_gallery_db",
         PRICE_GALLERY_DB_VERSION = 3,
         PRICE_GALLERY_IMAGE_STORE = "images",
@@ -28,10 +29,13 @@ const KEY = "zy_kb_system_v2",
       const CUSTOMER_CODE_BACKUP_MAX_BYTES = 5 * 1024 * 1024;
       const storedGroupsRaw = localStorage.getItem(KEY);
       const storedGroups = JSON.parse(storedGroupsRaw || "null");
+      const skipDefaultSeed =
+        localStorage.getItem(SKIP_DEFAULT_SEED_KEY) === "1";
       let needsDataVersionWrite =
         localStorage.getItem(DATA_VERSION_KEY) !== DATA_VERSION;
-      let groups = storedGroups || structuredClone(ORIGINAL_DATA);
-      if (storedGroups && needsDataVersionWrite) {
+      let groups = storedGroups ||
+        (skipDefaultSeed ? [] : structuredClone(ORIGINAL_DATA));
+      if (storedGroups && needsDataVersionWrite && !skipDefaultSeed) {
         if (!localStorage.getItem(DATA_BACKUP_KEY)) {
           localStorage.setItem(DATA_BACKUP_KEY, storedGroupsRaw);
         }
@@ -8674,7 +8678,7 @@ const KEY = "zy_kb_system_v2",
         const backdrop = document.createElement("div");
         backdrop.id = "clearLocalDataDialog";
         backdrop.className = "ledger-modal-backdrop";
-        backdrop.innerHTML = `<section class="ledger-modal clear-local-data-dialog" role="dialog" aria-modal="true" aria-labelledby="clearLocalDataTitle"><header><div><span class="section-kicker">LOCAL DATA</span><h2 id="clearLocalDataTitle">清除本机数据</h2></div><button type="button" class="ledger-modal-close" aria-label="关闭" onclick="closeClearLocalDataDialog()">×</button></header><p>此操作将清除当前设备中保存的全部知识库数据，包括记账记录、客户编码、成品号邮箱、分类、第三方群等本地数据。</p><p class="ledger-storage-warning"><strong>清除后无法恢复，建议先导出备份。</strong></p><footer><button type="button" class="btn" onclick="closeClearLocalDataDialog()">取消</button><button type="button" class="btn danger" onclick="confirmClearLocalData(this)">确认清除</button></footer></section>`;
+        backdrop.innerHTML = `<section class="ledger-modal clear-local-data-dialog" role="dialog" aria-modal="true" aria-labelledby="clearLocalDataTitle"><header><div><span class="section-kicker">LOCAL DATA</span><h2 id="clearLocalDataTitle">清除本机数据</h2></div><button type="button" class="ledger-modal-close" aria-label="关闭" onclick="closeClearLocalDataDialog()">×</button></header><p>此操作将清除当前设备保存的全部知识库及业务数据。</p><p>清除后，本设备将保持空白状态，不会自动恢复默认知识库。</p><p class="ledger-storage-warning"><strong>此操作无法撤销，建议先导出备份。</strong></p><footer><button type="button" class="btn" onclick="closeClearLocalDataDialog()">取消</button><button type="button" class="btn danger" onclick="confirmClearLocalData(this)">确认清除</button></footer></section>`;
         backdrop.addEventListener("click", (event) => {
           if (event.target === backdrop) closeClearLocalDataDialog();
         });
@@ -8720,10 +8724,12 @@ const KEY = "zy_kb_system_v2",
           clearTimeout(uiStateSaveTimer);
           removeProjectStorage(localStorage);
           removeProjectStorage(sessionStorage);
+          localStorage.setItem(SKIP_DEFAULT_SEED_KEY, "1");
           $("#clearLocalDataDialog")?.remove();
           toast("本机数据已清除");
           setTimeout(() => window.location.reload(), 180);
         } catch (error) {
+          isClearingLocalData = false;
           button.disabled = false;
           button.textContent = "确认清除";
           alert(
@@ -8731,6 +8737,54 @@ const KEY = "zy_kb_system_v2",
               ? "清除暂时被同站点的其他页面占用，请关闭其他智源客服知识库页面后重试。"
               : "清除未能完整完成，请重试；如仍失败，请检查浏览器存储权限。",
           );
+        }
+      }
+      function closeRestoreDefaultDataDialog() {
+        if (isClearingLocalData) return;
+        $("#restoreDefaultDataDialog")?.remove();
+      }
+      function openRestoreDefaultDataDialog() {
+        if (isClearingLocalData || $("#restoreDefaultDataDialog")) return;
+        const backdrop = document.createElement("div");
+        backdrop.id = "restoreDefaultDataDialog";
+        backdrop.className = "ledger-modal-backdrop";
+        backdrop.innerHTML = `<section class="ledger-modal clear-local-data-dialog" role="dialog" aria-modal="true" aria-labelledby="restoreDefaultDataTitle"><header><div><span class="section-kicker">DEFAULT KNOWLEDGE BASE</span><h2 id="restoreDefaultDataTitle">恢复默认知识库</h2></div><button type="button" class="ledger-modal-close" aria-label="关闭" onclick="closeRestoreDefaultDataDialog()">×</button></header><p>将重新载入系统默认的分类和知识内容。</p><p class="ledger-storage-warning"><strong>此操作会覆盖当前知识库中的自定义分类、文章、收藏、排序和文章图片；记账、客户编码、邮箱及其他业务数据不会被删除。</strong></p><footer><button type="button" class="btn" onclick="closeRestoreDefaultDataDialog()">取消</button><button type="button" class="btn primary" onclick="confirmRestoreDefaultData(this)">确认恢复</button></footer></section>`;
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) closeRestoreDefaultDataDialog();
+        });
+        document.body.appendChild(backdrop);
+        requestAnimationFrame(() => backdrop.classList.add("is-open"));
+        backdrop.querySelector("button")?.focus();
+      }
+      function confirmRestoreDefaultData(button) {
+        if (isClearingLocalData) return;
+        button.disabled = true;
+        button.textContent = "正在恢复…";
+        try {
+          isClearingLocalData = true;
+          clearTimeout(uiStateSaveTimer);
+          [
+            KEY,
+            FKEY,
+            RKEY,
+            IKEY,
+            CATEGORY_ORDER_KEY,
+            CATEGORY_NAME_OVERRIDE_KEY,
+            ARTICLE_ORDER_KEY,
+            ARTICLE_CATEGORY_OVERRIDE_KEY,
+            DATA_VERSION_KEY,
+            DATA_BACKUP_KEY,
+            SKIP_DEFAULT_SEED_KEY,
+          ].forEach((key) => localStorage.removeItem(key));
+          sessionStorage.removeItem(UI_STATE_KEY);
+          $("#restoreDefaultDataDialog")?.remove();
+          toast("默认知识库已恢复");
+          setTimeout(() => window.location.reload(), 180);
+        } catch (error) {
+          isClearingLocalData = false;
+          button.disabled = false;
+          button.textContent = "确认恢复";
+          alert("恢复默认知识库失败，请检查浏览器存储权限后重试。");
         }
       }
       function importData() {
@@ -8765,17 +8819,6 @@ const KEY = "zy_kb_system_v2",
           r.readAsText(i.files[0]);
         };
         i.click();
-      }
-      function resetData() {
-        if (confirm("确定恢复首版内容吗？当前修改将被覆盖。")) {
-          groups = structuredClone(ORIGINAL_DATA);
-          hydrateGroups();
-          applyArticleCategoryOverrides();
-          favs = [];
-          recent = [];
-          save();
-          showHome();
-        }
       }
       $("#q").addEventListener("input", () => {
         const hasQuery = Boolean($("#q").value.trim());
